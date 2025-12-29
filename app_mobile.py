@@ -605,9 +605,9 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
         
         return final_response      
         
-    except Exception as e:
-        return {"job_no": "Error", "issues": [{"item": "System Error", "common_reason": str(e)}], "_token_usage": {"input": 0, "output": 0}}
-        
+        except Exception as e:
+            return {"job_no": "Error", "issues": [{"item": "System Error", "common_reason": str(e)}], "_token_usage": {"input": 0, "output": 0}}
+            
 def python_numerical_audit(dimension_data):
     new_issues = []
     import re
