@@ -621,30 +621,9 @@ def python_numerical_audit(dimension_data):
         category = item.get("category", "")
         page_num = item.get("page", "?")
 
-        # 解析標準值 (從文字抓數字)
-        try:
-            target_val = float(re.findall(r"\d+\.?\d*", str(raw_spec))[0])
-        except:
-            target_val = 196.0 
-
-        for entry in rid_list:
-            rid = entry.get("id")
-            val_str = str(entry.get("val", "")).strip()
-            if not val_str: continue
-
-            try:
-                val = float(val_str)
-                # 格式判定：是否為整數格式（不含小數點）
-                is_pure_int = "." not in val_str
-                # 格式判定：是否為兩位小數格式 (#.##)
-                is_two_decimal = "." in val_str and len(val_str.split(".")[-1]) == 2
-                
-                is_passed = True
-                reason = ""
-
         # --- 1. 改良版：提取規格中的「最大尺寸」作為基準 ---
         # 例如從 "每次車修直徑0.5~2mm,至196mm再生" 提取出 [0.5, 2, 196]
-            all_nums = re.findall(r"\d+\.?\d*", raw_spec)
+        all_nums = re.findall(r"\d+\.?\d*", raw_spec)
         try:
             # 取最大值 (如 196)，這樣就能自動忽略前面的 0.5 或 2
             target_val = max([float(n) for n in all_nums])
