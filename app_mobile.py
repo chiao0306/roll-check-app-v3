@@ -642,17 +642,51 @@ def python_numerical_audit(dimension_data):
                 is_passed = True
                 reason = ""
 
-                # --- 1. 未再生車修 (本體) ---
-                if category == "未再生車修":
-                    # 規則：<= 規格 須為整數； > 規格 須為 #.##
+        # --- 1. 改良版：提取規格中的「最大尺寸」作為基準 ---
+        # 例如從 "每次車修直徑0.5~2mm,至196mm再生" 提取出 [0.5, 2, 196]
+        all_nums = re.findall(r"\d+\.?\d*", raw_spec)
+        try:
+            # 取最大值 (如 196)，這樣就能自動忽略前面的 0.5 或 2
+            target_val = max([float(n) for n in all_nums])
+        except:
+            target_val = 196.0 # 若完全抓不到數字的保底
+
+        for entry in rid_list:
+            rid = entry.get("id")
+            val_str = str(entry.get("val", "")).strip()
+            if not val_str: continue
+
+            try:
+                val = float(val_str)
+                # 判定格式 (嚴格執行：無小數點才算整數)
+                is_pure_int = "." not in val_str
+                # 判定格式 (嚴格執行：小數點後剛好兩位)
+                is_two_decimal = "." in val_str and len(val_str.split(".")[-1]) == 2
+                
+                is_passed = True
+                reason = ""
+
+                # --- 核心邏輯：未再生車修 (依照你提供的三準則) ---
+                if "未再生" in category or "未再生" in title:
+                    # 準則 1：實測 <= 規格 且 為整數 -> PASS
                     if val <= target_val:
-                        if not is_pure_int:
+                        if is_pure_int:
+                            is_passed = True
+                        else:
                             is_passed = False
-                            reason = f"未再生(<=標準): 格式錯誤，應為整數 (實測:{val_str})"
+                            reason = f"未再生(<=標準{target_val}): 格式不符，應為整數 (實測:{val_str})"
+                    
+                    # 準則 2：實測 > 規格 且 為兩位小數 -> PASS
+                    # 準則 3：實測 > 規格 且 為整數 -> FAIL
                     else: # val > target_val
-                        if not is_two_decimal:
+                        if is_two_decimal:
+                            is_passed = True
+                        elif is_pure_int:
                             is_passed = False
-                            reason = f"未再生(>標準): 格式錯誤，應為兩位小數 (實測:{val_str})"
+                            reason = f"未再生(>標準{target_val}): 實測為整數，不符再生前需顯示兩位小數之規定"
+                        else:
+                            is_passed = False
+                            reason = f"未再生(>標準{target_val}): 格式錯誤，應為兩位小數 (實測:{val_str})"
 
                 # --- 2. 精加工 / 再生 / 研磨 (排除未再生後的情況) ---
                 elif category == "精加工再生":
