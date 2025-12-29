@@ -644,7 +644,7 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
 def python_numerical_audit(dimension_data):
     new_issues = []
     import re
-    if not dimension_data: return new_issues # 👈 只回傳一個值
+    if not dimension_data: return new_issues
 
     for item in dimension_data:
         rid_list = item.get("data", [])
@@ -653,10 +653,9 @@ def python_numerical_audit(dimension_data):
         page_num = item.get("page", "?")
         raw_spec = str(item.get("std_spec", ""))
         
-        # 從規格文字抓取數字，排除常見雜訊（如 1,2,3 號機、350 輥輪等）
-        # 我們排除 1~10 這種可能是項次或機號的小數字，以及明顯是輥輪型號的 350
-        all_nums = [float(n) for n in re.findall(r"\d+\.?\d*", raw_spec)]
-        clean_std = [n for n in all_nums if n != 350 and n > 10] 
+        # --- 核心修正：針對「未再生本體」強制掃描文字抓最大值 ---
+        # 即使 AI 提取了 std_max，我們也重新從原始文字抓取所有數字來比對
+        all_nums_in_spec = [float(n) for n in re.findall(r"\d+\.?\d*", raw_spec)]
         
         for entry in rid_list:
             rid = entry.get("id")
@@ -669,55 +668,75 @@ def python_numerical_audit(dimension_data):
                 is_two_dec = "." in val_str and len(val_str.split(".")[-1]) == 2
                 is_passed = True
                 reason = ""
-                used_target = "N/A"
 
-                # --- 1. 未再生本體 ---
+                 # --- 1. 未再生本體 (依照三準則 + 強制最大值) ---
                 if cat == "未再生本體" or ("未再生" in title and "軸頸" not in title):
-                    used_target = max(clean_std) if clean_std else 196.0
-                    if val <= used_target:
+                    # 強制取規格內所有數字的最大值 (解決 294 vs 285 問題)
+                    target = max(all_nums_in_spec) if all_nums_in_spec else 196.0
+                    
+                    if val <= target:
                         if not is_pure_int:
-                            is_passed, reason = False, f"未再生(<=標準{used_target}): 應為整數"
-                    else:
-                        if not is_two_dec:
-                            is_passed, reason = False, f"未再生(>標準{used_target}): 應填兩位小數"
+                            is_passed = False
+                            reason = f"未再生本體(<=標準{target}): 應為整數格式"
+                    else: # val > target
+                        if is_two_dec:
+                            is_passed = True # 合格
+                        elif is_pure_int:
+                            is_passed = False
+                            reason = f"未再生本體(>標準{target}): 超出標準禁填整數，應填兩位小數"
+                        else:
+                            is_passed = False
+                            reason = f"未再生本體(>標準{target}): 格式錯誤，應為 #.##"
 
-                # --- 2. 軸頸未再生 ---
-                elif cat == "軸頸未再生" or ("軸頸" in title and "未再生" in title):
-                    used_target = max(clean_std) if clean_std else 0
+                # --- 2. 軸頸未再生 (整數 + 上限) ---
+                elif cat == "軸頸未再生":
+                    target = max(s_list) if s_list else (s_max if s_max else 0)
                     if not is_pure_int:
-                        is_passed, reason = False, "軸頸未再生: 應為純整數"
-                    elif used_target > 0 and val > used_target:
-                        is_passed, reason = False, f"軸頸未再生: 超過上限 {used_target}"
+                        is_passed = False
+                        reason = "軸頸未再生: 應為純整數格式"
+                    elif target > 0 and val > target:
+                        is_passed = False
+                        reason = f"軸頸未再生: 超出規格上限 {target}"
 
-                # --- 3. 精加工 / 再生 / 研磨 ---
-                elif cat == "精加工再生" or any(x in title for x in ["再生", "精加工", "研磨"]):
-                    s_ranges = item.get("std_ranges", [])
+                # --- 3. 精加工 / 再生 / 研磨 (兩位小數 + 多重區間任一符合) ---
+                elif cat == "精加工再生":
                     if not is_two_dec:
-                        is_passed, reason = False, "精加工: 格式錯誤，應為兩位小數"
+                        is_passed = False
+                        reason = "精加工/再生: 格式錯誤，應為兩位小數"
                     elif s_ranges:
+                        # 檢查是否符合任一個區間
                         if not any(r[0] <= val <= r[1] for r in s_ranges if len(r)==2):
-                            is_passed, reason = False, f"精加工: 不在區間內 {s_ranges}"
-                    used_target = str(s_ranges)
+                            is_passed = False
+                            reason = f"精加工: 數值不在規範區間內 {s_ranges}"
+                    elif s_list:
+                        if val > max(s_list):
+                            is_passed = False
+                            reason = f"精加工: 超出上限標準 {max(s_list)}"
 
-                # --- 4. 銲補 (關鍵錯誤修正) ---
-                elif cat == "銲補" or "銲補" in title:
+                # --- 4. 銲補 (整數 + 就近匹配下限) ---
+                elif cat == "銲補":
                     if not is_pure_int:
-                        is_passed, reason = False, "銲補: 格式錯誤，應為整數"
-                    elif clean_std:
-                        used_target = min(clean_std, key=lambda x: abs(x - val))
-                        if val < used_target:
-                            is_passed, reason = False, f"銲補: 數值不足，低於下限 {used_target}"
-                    else:
-                        used_target = "未偵測到規格數字"
+                        is_passed = False
+                        reason = "銲補: 格式錯誤，應為純整數格式"
+                    elif s_list:
+                        # 核心：就近匹配基準
+                        match_target = min(s_list, key=lambda x: abs(x - val))
+                        if val < match_target:
+                            is_passed = False
+                            reason = f"銲補: 數值不足，低於匹配基準 {match_target}"
 
-                else:
+                if not is_passed:
                     new_issues.append({
-                        "page": page_num, "item": title, "issue_type": "數值異常(系統判定)",
-                        "rule_used": f"Excel: {raw_spec}", "common_reason": reason,
-                        "failures": [{"id": rid, "val": val_str, "target": f"基準:{used_target}", "calc": "🐍 Python硬核複核"}],
+                        "page": page_num,
+                        "item": title,
+                        "issue_type": "數值異常(系統判定)",
+                        "rule_used": f"Excel: {raw_spec}",
+                        "common_reason": reason,
+                        "failures": [{"id": rid, "val": val_str, "target": "符合規範", "calc": "🐍 系統判定"}],
                         "source": "🐍 系統判定"
                     })
-            except: continue
+            except:
+                continue
     return new_issues
     
 # --- 6. 手機版 UI 與 核心執行邏輯 ---
@@ -937,47 +956,52 @@ if st.session_state.photo_gallery:
             
         status.text("總稽核 Agent 正在進行全方位分析...")
         
-        # 1. 執行 AI 分析
+        # --- 單一代理執行 ---
         t0 = time.time()
+        # 呼叫合併後的 Agent
         res_main = agent_unified_check(combined_input, full_text_for_search, GEMINI_KEY, main_model_name)
-        time_main = time.time() - t0
-
-        # --- ✅ 修改點 1：現在會回傳「異常清單」和「合格紀錄」兩個變數 ---
+        
+        # --- ✨ 新增這兩行：啟動 Python 硬核複核 ---
         dim_data = res_main.get("dimension_data", [])
         python_numeric_issues = python_numerical_audit(dim_data)
-        # -------------------------------------------------------
+        # ----------------------------------------
+        
+        t1 = time.time()
+        time_main = t1 - t0
+        
+        progress_bar.progress(100)
+        status.empty()
+        
+        total_end = time.time()
+        
+        # --- 1. 成本計算 (保持原樣) ---
+        usage_main = res_main.get("_token_usage", {"input": 0, "output": 0})
+        
+        def get_model_rate(model_name):
+            name = model_name.lower()
+            if "gpt" in name:
+                if "mini" in name: return 0.15, 0.60
+                elif "3.5" in name: return 0.50, 1.50
+                else: return 2.50, 10.00
+            else:
+                if "flash" in name: return 0.075, 0.30
+                else: return 1.25, 5.00 # Pro
 
-        # 3. 執行 Python 表頭檢查
+        rate_in, rate_out = get_model_rate(main_model_name)
+        cost_usd = (usage_main["input"] / 1_000_000 * rate_in) + (usage_main["output"] / 1_000_000 * rate_out)
+        cost_twd = cost_usd * 32.5
+        
+        # --- 2. 啟動 Python 硬核數值稽核 ---
+        # 從 AI 提取的數據中執行 Python 判定
+        dim_data = res_main.get("dimension_data", [])
+        python_numeric_issues = python_numerical_audit(dim_data)
+        
+        # --- 3. Python 表頭檢查 (原有功能) ---
         python_header_issues, python_debug_data = python_header_check(st.session_state.photo_gallery)
         
-        # 4. 合併結果
+        # --- 4. 合併所有結果 ---
         ai_raw_issues = res_main.get("issues", [])
         ai_filtered_issues = []
-        for i in ai_raw_issues:
-            i['source'] = '🤖 總稽核 AI'
-            i_type = i.get("issue_type", "")
-            ai_keywords = ["統計", "數量", "不符", "流程", "順序", "幽靈", "依賴", "表頭", "運費", "未匹配"]
-            if any(kw in i_type for kw in ai_keywords):
-                ai_filtered_issues.append(i)
-            elif "數值" not in i_type and "尺寸" not in i_type and "格式" not in i_type:
-                ai_filtered_issues.append(i)
-            
-        all_issues = ai_filtered_issues + python_numeric_issues + python_header_issues
-
-        # --- ✅ 修改點 2：在快取中多存入 python_passed_logs --- 
-        st.session_state.analysis_result_cache = {
-            "job_no": res_main.get("job_no", "Unknown"),
-            "all_issues": all_issues,
-            "total_duration": time.time() - total_start,
-            "cost_twd": (res_main.get("_token_usage", {}).get("input", 0)*0.075 + res_main.get("_token_usage", {}).get("output", 0)*0.3) / 1000000 * 32.5,
-            "total_in": res_main.get("_token_usage", {}).get("input", 0),
-            "total_out": res_main.get("_token_usage", {}).get("output", 0),
-            "ocr_duration": ocr_duration,
-            "time_eng": time_main,
-            "full_text_for_search": full_text_for_search,
-            "combined_input": combined_input,
-            "python_debug_data": python_debug_data
-        }
 
         for i in ai_raw_issues:
             i['source'] = '🤖 總稽核 AI'
