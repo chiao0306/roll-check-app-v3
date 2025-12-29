@@ -611,100 +611,100 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
 
 # --- 重點：下面這個 def 必須完全貼齊左邊牆壁 (0個空格) ---
 def python_numerical_audit(dimension_data):
-    new_issues = []
-    import re
+        new_issues = []
+        import re
     
-    if not dimension_data:
-        return new_issues
+        if not dimension_data:
+            return new_issues
 
-    for item in dimension_data:
-        rid_list = item.get("data", [])
-        raw_spec = item.get("std_spec", "")
-        logic_instr = item.get("logic_instruction", "")
-        title = item.get("item_title", "")
-        category = item.get("category", "")
-        page_num = item.get("page", "?")
+        for item in dimension_data:
+            rid_list = item.get("data", [])
+            raw_spec = item.get("std_spec", "")
+            logic_instr = item.get("logic_instruction", "")
+            title = item.get("item_title", "")
+            category = item.get("category", "")
+            page_num = item.get("page", "?")
 
-        # 解析標準值 (從文字抓數字)
-        try:
-            # 優先從 Standard_Spec 抓數字
-            target_val = float(re.findall(r"\d+\.?\d*", str(raw_spec))[0])
-        except:
-            target_val = 196.0 
-
-        for entry in rid_list:
-            rid = entry.get("id")
-            val_str = str(entry.get("val", "")).strip()
-            if not val_str: continue
-
+            # 解析標準值 (從文字抓數字)
             try:
-                val = float(val_str)
-                # 格式判定：是否為整數格式（不含小數點）
-                is_pure_int = "." not in val_str
-                # 格式判定：是否為兩位小數格式 (#.##)
-                is_two_decimal = "." in val_str and len(val_str.split(".")[-1]) == 2
-                
-                is_passed = True
-                reason = ""
+            # 優先從 Standard_Spec 抓數字
+                target_val = float(re.findall(r"\d+\.?\d*", str(raw_spec))[0])
+            except:
+                target_val = 196.0 
 
-                # --- 1. 未再生車修 (本體) ---
-                # 邏輯：<= 標準 須為整數； > 標準 須為兩位小數
-                if "未再生" in category or "未再生" in title:
-                    if val <= target_val:
-                        if not is_pure_int:
-                            is_passed = False
-                            reason = f"未再生(<=標準): 格式錯誤，應為整數 (實測:{val_str})"
-                    else: 
+            for entry in rid_list:
+                rid = entry.get("id")
+                val_str = str(entry.get("val", "")).strip()
+                if not val_str: continue
+
+                try:
+                    val = float(val_str)
+                    # 格式判定：是否為整數格式（不含小數點）
+                    is_pure_int = "." not in val_str
+                    # 格式判定：是否為兩位小數格式 (#.##)
+                    is_two_decimal = "." in val_str and len(val_str.split(".")[-1]) == 2
+                    
+                    is_passed = True
+                    reason = ""
+    
+                    # --- 1. 未再生車修 (本體) ---
+                    # 邏輯：<= 標準 須為整數； > 標準 須為兩位小數
+                    if "未再生" in category or "未再生" in title:
+                        if val <= target_val:
+                            if not is_pure_int:
+                                is_passed = False
+                                reason = f"未再生(<=標準): 格式錯誤，應為整數 (實測:{val_str})"
+                        else: 
+                            if not is_two_decimal:
+                                is_passed = False
+                                reason = f"未再生(>標準): 格式錯誤，應為兩位小數 (實測:{val_str})"
+    
+                    # --- 2. 精加工 / 再生 / 研磨 (排除未再生) ---
+                    elif any(x in category for x in ["再生", "研磨", "精加工"]) and "未再生" not in title:
                         if not is_two_decimal:
                             is_passed = False
-                            reason = f"未再生(>標準): 格式錯誤，應為兩位小數 (實測:{val_str})"
-
-                # --- 2. 精加工 / 再生 / 研磨 (排除未再生) ---
-                elif any(x in category for x in ["再生", "研磨", "精加工"]) and "未再生" not in title:
-                    if not is_two_decimal:
-                        is_passed = False
-                        reason = f"精加工/再生: 格式錯誤，應為兩位小數 (實測:{val_str})"
-
-                # --- 3. 軸頸未再生 ---
-                elif "軸頸" in category and "未再生" in category:
-                    if not is_pure_int:
-                        is_passed = False
-                        reason = f"軸頸未再生: 應為整數格式 (實測:{val_str})"
-                    elif val > target_val:
-                        is_passed = False
-                        reason = f"軸頸未再生: 超出規格上限 {target_val}"
-
-                # --- 4. 銲補 ---
-                elif "銲補" in category:
-                    if not is_pure_int:
-                        is_passed = False
-                        reason = f"銲補: 應為整數格式 (實測:{val_str})"
-                    elif val < target_val:
-                        is_passed = False
-                        reason = f"銲補: 低於規格下限 {target_val}"
-
-                # --- 5. 組裝 / 真圓度 ---
-                elif "組裝" in category or "真圓度" in title:
-                    if abs(val) > target_val:
-                        is_passed = False
-                        reason = f"組裝/真圓度: 數值超出範圍 (實測:{val_str}, 標準:{target_val})"
-                    elif not is_two_decimal:
-                        is_passed = False
-                        reason = "組裝/真圓度: 格式錯誤，應為兩位小數"
-
-                if not is_passed:
-                    new_issues.append({
-                        "page": page_num,
-                        "item": title,
-                        "issue_type": "數值異常(Python判定)",
-                        "rule_used": f"Excel規則: {raw_spec}",
-                        "common_reason": reason,
-                        "failures": [{"id": rid, "val": val_str, "target": raw_spec, "calc": "Python 硬核複核"}],
-                        "source": "🐍 系統判定"
-                    })
-            except:
-                continue
-    return new_issues
+                            reason = f"精加工/再生: 格式錯誤，應為兩位小數 (實測:{val_str})"
+    
+                    # --- 3. 軸頸未再生 ---
+                    elif "軸頸" in category and "未再生" in category:
+                        if not is_pure_int:
+                            is_passed = False
+                            reason = f"軸頸未再生: 應為整數格式 (實測:{val_str})"
+                        elif val > target_val:
+                            is_passed = False
+                            reason = f"軸頸未再生: 超出規格上限 {target_val}"
+    
+                    # --- 4. 銲補 ---
+                    elif "銲補" in category:
+                        if not is_pure_int:
+                            is_passed = False
+                            reason = f"銲補: 應為整數格式 (實測:{val_str})"
+                        elif val < target_val:
+                            is_passed = False
+                            reason = f"銲補: 低於規格下限 {target_val}"
+    
+                    # --- 5. 組裝 / 真圓度 ---
+                    elif "組裝" in category or "真圓度" in title:
+                        if abs(val) > target_val:
+                            is_passed = False
+                            reason = f"組裝/真圓度: 數值超出範圍 (實測:{val_str}, 標準:{target_val})"
+                        elif not is_two_decimal:
+                            is_passed = False
+                            reason = "組裝/真圓度: 格式錯誤，應為兩位小數"
+    
+                    if not is_passed:
+                        new_issues.append({
+                            "page": page_num,
+                            "item": title,
+                            "issue_type": "數值異常(Python判定)",
+                            "rule_used": f"Excel規則: {raw_spec}",
+                            "common_reason": reason,
+                            "failures": [{"id": rid, "val": val_str, "target": raw_spec, "calc": "Python 硬核複核"}],
+                            "source": "🐍 系統判定"
+                        })
+                except:
+                    continue
+        return new_issues
     
 # --- 6. 手機版 UI 與 核心執行邏輯 ---
 st.title("🏭 交貨單稽核")
