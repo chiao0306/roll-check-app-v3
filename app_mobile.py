@@ -576,27 +576,32 @@ def python_numerical_audit(dimension_data):
     if not dimension_data: return new_issues
 
     for item in dimension_data:
-        # --- 🛡️ 數據字串拆解 (取代原本的 JSON 列表) ---
-        data_str = item.get("data_string", "")
-        # 將 "ID:Val, ID:Val" 轉換成 list
+        # 1. 取得數據字串並拆解
+        data_str = str(item.get("data_string", "")).strip()
+        if not data_str or ":" not in data_str:
+            continue # 如果 AI 沒抄資料，這項就跳過
+            
         raw_entries = [pair.split(":") for pair in data_str.split(",") if ":" in pair]
         
         title = item.get("item_title", "")
-        cat = item.get("category", "")
+        # 💡 分類名稱去空格且轉小寫，防止 AI 亂寫
+        cat = str(item.get("category", "")).strip()
         page_num = item.get("page", "?")
         raw_spec = str(item.get("std_spec", ""))
         
-        # 規格數據清洗 (過濾機號與型號雜訊)
-        all_raw_nums = [float(n) for n in re.findall(r"\d+\.?\d*", raw_spec)]
-        noise = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 300.0, 350.0, 200.0]
-        clean_std = [n for n in all_raw_nums if n not in noise and n > 10]
+        # 2. 獲取標準數字 (優先聽 AI 的 std_list，拿不到才用 Regex)
+        s_list = item.get("std_list", [])
+        if not s_list:
+            s_list = [float(n) for n in re.findall(r"\d+\.?\d*", raw_spec)]
+            
+        # 清洗標準值 (過濾掉機號、輥輪型號等雜訊數字)
+        clean_std = [n for n in s_list if n > 10 and n not in [350.0, 300.0, 200.0]]
         s_ranges = item.get("std_ranges", [])
 
         for entry in raw_entries:
             if len(entry) < 2: continue
-            rid = entry[0].strip()
-            val_str = entry[1].strip()
-            if not val_str or val_str in ["N/A", "nan", ""]: continue
+            rid, val_str = entry[0].strip(), entry[1].strip()
+            if not val_str or val_str in ["N/A", "nan"]: continue
 
             try:
                 val = float(val_str)
@@ -644,7 +649,7 @@ def python_numerical_audit(dimension_data):
                     new_issues.append({
                         "page": page_num, "item": title, "issue_type": "數值異常(系統判定)",
                         "rule_used": f"Excel: {raw_spec}", "common_reason": reason,
-                        "failures": [{"id": rid, "val": val_str, "target": "符合規範", "calc": "🐍 系統判定"}],
+                        "failures": [{"id": rid, "val": val_str, "target": f"基準:{t_used}", "calc": "🐍 Python 判定"}],
                         "source": "🐍 系統判定"
                     })
             except: continue
@@ -910,23 +915,23 @@ if st.session_state.photo_gallery:
         # --- 3. Python 表頭檢查 (原有功能) ---
         python_header_issues, python_debug_data = python_header_check(st.session_state.photo_gallery)
         
-        # --- 4. 合併結果 (防誤報加強版) ---
+        # --- 4. 合併結果 ---
         ai_raw_issues = res_main.get("issues", [])
         ai_filtered_issues = []
 
         for i in ai_raw_issues:
             i['source'] = '🤖 總稽核 AI'
             i_type = i.get("issue_type", "")
-            common_reason = i.get("common_reason", "")
+            reason = i.get("common_reason", "")
             
-            # 💡 過濾 AI 對數值的比大小判斷，改用 Python 算出來的
-            numerical_keywords = ["大於", "小於", "尺寸", "規格", "超規", "不足", "格式", "<", ">"]
-            if any(kw in common_reason or kw in i_type for kw in numerical_keywords):
-                # 只有會計統計相關的例外保留
+            # 關鍵過濾：只要 AI 想評論「尺寸、數值、格式、大於、小於」，通通閉嘴
+            num_keywords = ["數值", "尺寸", "格式", "大於", "小於", "超規", "不足", "規範", "<", ">"]
+            if any(kw in reason or kw in i_type for kw in num_keywords):
+                # 只有統計統計、PC數量相關的除外
                 if "統計" in i_type or "數量" in i_type:
                     ai_filtered_issues.append(i)
                 else:
-                    continue 
+                    continue # 丟棄 AI 的數值判斷
             else:
                 ai_filtered_issues.append(i)
             
