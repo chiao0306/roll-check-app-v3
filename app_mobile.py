@@ -605,7 +605,7 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
         
         return final_response
         
-    def python_numerical_audit(dimension_data):
+def python_numerical_audit(dimension_data):
         new_issues = []
         import re
     
