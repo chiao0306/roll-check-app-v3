@@ -14,7 +14,7 @@ from collections import Counter
 import re
 
 # --- 1. 頁面設定 ---
-st.set_page_config(page_title="交貨單稽核(單一代理)", page_icon="🏭", layout="centered")
+st.set_page_config(page_title="交貨單稽核", page_icon="🏭", layout="centered")
 
 # --- CSS 樣式 ---
 st.markdown("""
@@ -287,7 +287,7 @@ def extract_layout_with_azure(file_obj, endpoint, key):
         full_content_text = ""
         header_snippet = ""
 
-    return markdown_output, header_snippet, full_content_text, result.as_dict(), real_page_num
+    return markdown_output, header_snippet, full_content_text, None, real_page_num
 
 # --- Python 硬邏輯：表頭一致性檢查 (長度敏感版) ---
 def python_header_check(photo_gallery):
@@ -400,9 +400,6 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
     你是一位極度嚴謹的中鋼機械品管【總稽核官】。
     你的大腦運作必須像「電腦程式」一樣，嚴格遵守以下的「法律階級」與「執行流程」。
     完全依照規則，禁止自己解釋。
-
-    ### 🧠 你的知識庫 (Knowledge Base)
-    {dynamic_rules}
     
     ---
 
@@ -425,8 +422,15 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
     **判定公式：PASS = (Step 1 數值合格) AND (Step 2 邏輯合格)**
 
     **Step 1: 特規指令與數值檢查**
-    *   **讀取**：[第一區] 的 `Standard_Spec` 與 `Logic_Prompt`。
+    *   **讀取與解析**：讀取 Standard_Spec 並深入解析 Logic_Prompt。
     *   **檢查指令**：若 `Logic_Prompt` 有內容，優先執行。
+    *   **條件判定 (CRITICAL)：
+        *   若 Logic_Prompt 定義了「大於規格但格式正確即合格」的邏輯（例如：實測 > 規格 且為 #.## 兩位小數則合格），必須以此為準，嚴禁直接判定為超規。
+        *   核對流程：
+        *   先判斷實測值與規格的大小關係。
+        *   再檢查該大小關係對應的「小數位數格式」。
+        *   若符合 Excel 規定的「大小關係 + 格式組合」，即判定為 PASS。
+    *   **標題鎖定**：**嚴禁建議重歸類。** 僅針對當前標題下的數據進行核對。若數據符合該標題對應的 Excel 規範，則判定為合格。禁止以「數值過低應屬再生」等理由判定不合格。
     *   **比對數值**：若有 `Standard_Spec`，以此為標準。
 
     **Step 2: 物理與通用邏輯檢查 (CRITICAL STEP)**
@@ -434,7 +438,7 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
         *   `IF` Step 1 的 `Logic_Prompt` 是 **空白 (Empty)** -> **必須執行 Step 2**。
         *   `IF` Step 1 的 `Logic_Prompt` 寫了 "豁免" -> 只有這種情況才可跳過。
     *   **執行動作**：
-        1.  **物理順序**：檢查 `未再生(小) < 研磨(中) < 再生(大) < 銲補(最大)`。若違反 -> **FAIL**。
+        1.  **物理順序**：針對「同一滾輪編號 (Roll ID)」，檢查跨製程之演進數值。原則：`前段製程(未再生)之數值 應小於或等於 後段製程(再生/銲補)之數值`。
         2.  **依賴性**：檢查前後製程是否存在。
         3.  **通用格式**：若通用規則要求兩位小數，實測值須符合。
 
@@ -449,30 +453,35 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
         *   **參數來源**：查看特規的 **`[會]單項核對規則`**。
         *   若有 (如 "1SET=4PCS")：以此為準計算 (Rows / 4)。
         *   若無：預設 `1 SET = 2 PCS`, `1 PC = 1 PC`。
-      
+        
     **Step 2: 總表核對 (Global Summary Check)**
     *   **目標**：核對左上角「實交數量」 vs 「跨頁內文項目加總」。
     *   **執行邏輯**：請先讀取左上角的「項目名稱」，依據下列規則決定哪些「內文項目」需要被加總：
+    *   **證據收集**：若發現數量不符，你必須列出所有參與加總的「證據清單」。
+        - 格式：`項目名稱 (Page 頁碼)`
+        - 數值：該項目的計數結果。
 
     **A. 雙軌聚合模式 (Aggregated Mode)**
-    *   **觸發條件**：當左上角項目名稱 **同時包含** 「ROLL」 與 「車修 / 銲補 / 拆裝」其中之一時。
+    *   **觸發條件**：當左上角項目名稱 **包含**「機ROLL車修」、「機ROLL銲補」、「機ROLL拆裝」其中之一時。
         *   *(例如："W3 #1機 ROLL 車修", "ROLL 銲補")*
+        **加總清單**：必須明確列出各頁被計入的子項（如：本體未再生(P.2): 5, 軸頸再生(P.3): 2...）。
     *   **加總範圍 (預設)**：
-        *   **車修** = Sum(本體未再生 + 本體再生 + 軸頸未再生 + 軸頸再生)
-        *   **銲補** = Sum(本體銲補 + 軸頸銲補)
-        *   **拆裝** = Sum(新品組裝 + 舊品拆裝)
+        *   **機ROLL車修** = Sum(本體未再生 + 本體再生 + 軸頸未再生 + 軸頸再生)
+        *   **機ROLL銲補** = Sum(本體銲補 + 軸頸銲補)
+        *   **機ROLL拆裝** = Sum(新品組裝 + 舊品拆裝)
     *   **例外過濾 (特規介入)**：
         *   在加總上述項目之前，**必須**檢查該項目的 **`[會]聚合統計規則`**。
         *   若寫 **"豁免"** 或 **"強制歸類為通用"**：❌ **嚴禁**將其加入上述總帳。
         *   若寫 **"1SET=1PC"**：⚠️ 僅加入 **1** 個單位 (而非內文的實際行數)。
 
     **B. 標準對應模式 (Standard Mode)**
-    *   **觸發條件**：當左上角項目名稱 **不包含** 上述聚合關鍵字時 (例如「熱處理」、「Keyway」)。
+    *   **觸發條件**：當左上角項目名稱 **不包含**「機ROLL車修」、「機ROLL銲補」、「機ROLL拆裝」其中之一時。
+    *   **加總清單**：列出所有名稱對應的子項及其所在頁數。
     *   **加總範圍**：僅加總內文中 **「名稱完全對應」** 或 **「邏輯上屬於該項目」** 的子項目。
     *   **邏輯**：此模式下，**忽略** Excel 的 `[會]聚合統計規則`。只要名稱對上，就直接加總。
 
     **Step 3: 運費計算 (Freight Check)
-    *   **任務**：計算全卷「本體未再生車修」總數，核對左上角運費項次總數。
+    *   **任務**：計算全卷「本體」的「未再生車修」總數，核對左上角運費項次總數。
     *   **參數來源**：查看特規的 **`[會]運費計算規則`**。
         *   若寫 **"豁免"**：**嚴禁**將此項目計入運費。
         *   若寫 **"1SET=1PC"**：以 1:1 累加至運費。
@@ -481,27 +490,35 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
     ---
     
     ### 📝 輸出規範 (Output Format)
-    **請回傳單一 JSON 物件。**
-    
-    **【關鍵指令：統計不符時的強制格式】**
-    若發生 **統計表格數量不符**，`failures` 列表 **嚴禁** 寫 "Unknown"。
-    **必須** 生成以下兩行對照數據：
-    1. `{{ "id": "內文項目加總", "val": "計算值", "calc": "計算" }}`
-    2. `{{ "id": "統計表實交數量", "val": "目標值", "calc": "目標" }}`
+    **請根據異常類型，選擇對應的 `failures` 表格格式：**
 
+    #### 🛠️ A. 工程規格/流程異常 (Engineering Mode)
+    *   **適用類型：數值超規、尺寸異常、物理流程錯誤、格式錯誤。
+    *   **表格欄位填寫規範**：
+        - `id`: "滾輪編號" (例如：#1)
+        - `val`: "實測值" (例如：295.05)
+        - `target`: "Excel 標準" (例如：294.00 - 295.00)
+        - `calc`: "[數據層推導]" (範例：實測 198.10 > 規格 196.00，且符合兩位小數格式，依 Excel 特規判定為 PASS)
+
+    #### 💰 B. 會計數量/統計異常 (Accounting Mode)
+    *   **適用類型**：數量不符、統計不符。
+    *   **表格欄位定義 (三行法)**：
+        - 第一行：{{ "id": "🔍 統計基準", "val": "總表目標值", "calc": "目標總量" }}
+        - 證據行：{{ "id": "項目名稱 (P.頁碼)", "val": "該項數量", "calc": "計入加總" }}
+        - 最後行：{{ "id": "🧮 內文加總", "val": "你的計算結果", "calc": "計算總量" }}
+
+    **請回傳單一 JSON 物件：**
     {{
       "job_no": "工令編號",
       "issues": [
          {{
            "page": "頁碼",
            "item": "項目名稱",
-           "rule_used": "依據的規則 (請註明是 特規 還是 通用)",
-           "issue_type": "數值超規 / 流程異常 / 數量不符 / 統計不符",
-           "spec_logic": "判定標準",
-           "common_reason": "簡短原因 (限15字)",
-           "failures": [
-              {{ "id": "滾輪編號/項目", "val": "實測值/計數", "target": "規格/備註", "calc": "差值(若有)" }}
-           ]
+           "rule_used": "特規名稱/通用規則",
+           "issue_type": "數值超規 / 流程異常 / 統計不符",
+           "spec_logic": "判定標準 (簡述)",
+           "common_reason": "失敗原因 (15字內)",
+           "failures": []  // 依照上方 A 或 B 格式填寫
          }}
       ]
     }}
@@ -582,11 +599,11 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
                 # 1. 基本防呆：沒有 item 名稱就踢掉
                 if not item_name: 
                     continue
-
+                    
                 # 2. 【關鍵修正】矛盾清洗
                 # 如果 AI 說「合格」，但這又不是「未匹配規則」的強制回報 -> 代表這是 AI 多嘴，踢掉！
                 if "合格" in reason and "未匹配" not in i_type:
-                    continue
+                     continue
                 
                 # 3. 如果 AI 說「合格」，且是「未匹配」，但 issue_type 卻寫「數值超規」 -> 強制修正類型
                 if "合格" in reason and "未匹配" in i_type:
@@ -606,17 +623,18 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
         return {"job_no": "Error", "issues": [{"item": "System Error", "common_reason": str(e)}], "_token_usage": {"input": 0, "output": 0}}
 
 # --- 6. 手機版 UI 與 核心執行邏輯 ---
-st.title("🏭 交貨單稽核(單一代理)")
+st.title("🏭 交貨單稽核")
 
 data_source = st.radio(
     "請選擇資料來源：", 
-    ["📸 上傳照片", "📂 上傳 JSON 檔"], 
+    ["📸 上傳照片", "📂 上傳 JSON 檔", "📊 上傳 Excel 檔"], 
     horizontal=True
 )
 
 with st.container(border=True):
+    # --- 情況 A: 上傳照片 ---
     if data_source == "📸 上傳照片":
-        if st.session_state.get('source_mode') == 'json':
+        if st.session_state.get('source_mode') == 'json' or st.session_state.get('source_mode') == 'excel':
             st.session_state.photo_gallery = []
             st.session_state.source_mode = 'image'
 
@@ -642,42 +660,29 @@ with st.container(border=True):
                 st.session_state.auto_start_analysis = True
             components.html("""<script>window.parent.document.body.scrollTo(0, window.parent.document.body.scrollHeight);</script>""", height=0)
             st.rerun()
-            
-    else: 
+
+    # --- 情況 B: 上傳 JSON ---
+    elif data_source == "📂 上傳 JSON 檔":
         st.info("💡 請點擊下方按鈕，從你的資料夾選擇之前下載的 `.json` 檔。")
         uploaded_json = st.file_uploader("上傳JSON檔", type=['json'], key="json_uploader")
         
         if uploaded_json:
             try:
                 current_file_name = uploaded_json.name
-                last_loaded_file = st.session_state.get('last_loaded_json_name')
-
-                if current_file_name != last_loaded_file:
+                if st.session_state.get('last_loaded_json_name') != current_file_name:
                     json_data = json.load(uploaded_json)
-                    # ... (前段代碼) ...
-                    
-                    # 強制重置相簿
                     st.session_state.photo_gallery = []
                     st.session_state.source_mode = 'json'
                     st.session_state.last_loaded_json_name = current_file_name
                     
-                    # 引入 regex 模組 (如果上面沒引用的話)
                     import re
-
-                    # 還原資料
                     for page in json_data:
-                        # 【修改點】嘗試從 full_text 重新抓取真實頁碼
                         real_page = "Unknown"
                         full_text = page.get('full_text', '')
-                        
-                        # 使用跟 Azure 一樣的 Regex 抓取 "項次: 3/4"
                         if full_text:
                             match = re.search(r"(?:項次|Page|頁次|NO\.)[:\s]*(\d+)\s*[/／]\s*\d+", full_text, re.IGNORECASE)
                             if match:
                                 real_page = match.group(1)
-                        
-                        # 如果 JSON 裡原本就有存，也可以優先用存的
-                        # 但重抓一次比較保險
                         
                         st.session_state.photo_gallery.append({
                             'file': None,
@@ -685,19 +690,51 @@ with st.container(border=True):
                             'header_text': page.get('header_text'),
                             'full_text': full_text,
                             'raw_json': page.get('raw_json'),
-                            'real_page': real_page # <--- 把抓到的頁碼存進去！
+                            'real_page': real_page
                         })
                     
-                    # ... (後段代碼) ...
-                    
-                    st.toast(f"✅ 成功載入: {current_file_name}", icon="📂")
+                    st.toast(f"✅ 成功載入 JSON: {current_file_name}", icon="📂")
                     if st.session_state.enable_auto_analysis:
                         st.session_state.auto_start_analysis = True
                     st.rerun()
                 else:
-                    st.success(f"📂 目前載入檔案：**{uploaded_json.name}** (共 {len(st.session_state.photo_gallery)} 頁)")
+                    st.success(f"📂 目前載入 JSON：**{uploaded_json.name}**")
             except Exception as e:
                 st.error(f"JSON 檔案格式錯誤: {e}")
+
+    # --- 情況 C: 上傳 Excel (新增的放在這) ---
+    elif data_source == "📊 上傳 Excel 檔":
+        st.info("💡 上傳 Excel 檔後，系統會將表格內容轉換為文字供 AI 稽核。")
+        uploaded_xlsx = st.file_uploader("上傳 Excel 檔", type=['xlsx', 'xls'], key="xlsx_uploader")
+        
+        if uploaded_xlsx:
+            try:
+                current_file_name = uploaded_xlsx.name
+                if st.session_state.get('last_loaded_xlsx_name') != current_file_name:
+                    df_dict = pd.read_excel(uploaded_xlsx, sheet_name=None)
+                    st.session_state.photo_gallery = []
+                    st.session_state.source_mode = 'excel'
+                    st.session_state.last_loaded_xlsx_name = current_file_name
+                    
+                    for sheet_name, df in df_dict.items():
+                        df = df.fillna("")
+                        md_table = df.to_markdown(index=False)
+                        st.session_state.photo_gallery.append({
+                            'file': None,
+                            'table_md': md_table,
+                            'header_text': f"來源分頁: {sheet_name}",
+                            'full_text': f"Excel 內容 - 分頁 {sheet_name}\n" + md_table,
+                            'raw_json': None,
+                            'real_page': sheet_name
+                        })
+                    st.toast(f"✅ 成功載入 Excel: {current_file_name}", icon="📊")
+                    if st.session_state.enable_auto_analysis:
+                        st.session_state.auto_start_analysis = True
+                    st.rerun()
+                else:
+                    st.success(f"📊 目前載入 Excel：**{uploaded_xlsx.name}**")
+            except Exception as e:
+                st.error(f"Excel 讀取失敗: {e}")
 
 if st.session_state.photo_gallery:
     st.caption(f"已累積 {len(st.session_state.photo_gallery)} 頁文件")
@@ -735,17 +772,19 @@ if st.session_state.photo_gallery:
         
         def process_image_task(index, item):
             index = int(index)
+            # 如果已經有資料了就不重複掃描
             if item.get('table_md') and item.get('header_text') and item.get('full_text'):
                 real_page = item.get('real_page', str(index + 1))
-                return index, item['table_md'], item['header_text'], item['full_text'], item.get('raw_json'), real_page, None
-            
+                return index, item['table_md'], item['header_text'], item['full_text'], None, real_page, None
+    
             try:
                 if item.get('file') is None:
                     return index, None, None, None, None, None, "無圖片檔案"
                 
                 item['file'].seek(0)
-                table_md, header, full, raw, real_page = extract_layout_with_azure(item['file'], DOC_ENDPOINT, DOC_KEY)
-                return index, table_md, header, full, raw, real_page, None
+                # 這裡會接到我們剛才修改後回傳的 None
+                table_md, header, full, _, real_page = extract_layout_with_azure(item['file'], DOC_ENDPOINT, DOC_KEY)
+                return index, table_md, header, full, None, real_page, None
             except Exception as e:
                 return index, None, None, None, None, None, f"OCR失敗: {str(e)}"
 
@@ -770,6 +809,7 @@ if st.session_state.photo_gallery:
                     st.session_state.photo_gallery[idx]['full_text'] = f_txt
                     st.session_state.photo_gallery[idx]['raw_json'] = raw_j
                     st.session_state.photo_gallery[idx]['real_page'] = r_page
+                    st.session_state.photo_gallery[idx]['file'] = None
                     
                     extracted_data_list[idx] = {
                         "page": r_page,
@@ -998,14 +1038,6 @@ if st.session_state.photo_gallery:
         with st.expander("👀 查看傳給 AI 的最終文字 (Prompt Input)"):
             st.caption("這才是 AI 真正讀到的內容 (已過濾雜訊)：")
             st.code(cache['combined_input'], language='markdown')
-            
-        st.markdown("### 🔍 Azure OCR 原始資料 (Debug)")
-        for i, item in enumerate(st.session_state.photo_gallery):
-            with st.expander(f"📄 第 {i+1} 頁 Raw JSON", expanded=False):
-                if item.get('raw_json'):
-                    st.json(item.get('raw_json'))
-                else:
-                    st.caption("尚未取得資料")
     
     if st.session_state.photo_gallery and st.session_state.get('source_mode') != 'json':
         st.caption("已拍攝照片：")
