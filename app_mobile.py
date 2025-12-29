@@ -643,9 +643,8 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
 
 def python_numerical_audit(dimension_data):
     new_issues = []
-    passed_logs = [] # 新增：記錄所有被判定為合格的項目
     import re
-    if not dimension_data: return new_issues, passed_logs
+    if not dimension_data: return new_issues # 👈 只回傳一個值
 
     for item in dimension_data:
         rid_list = item.get("data", [])
@@ -711,10 +710,6 @@ def python_numerical_audit(dimension_data):
                     else:
                         used_target = "未偵測到規格數字"
 
-                if is_passed:
-                    passed_logs.append({
-                        "page": page_num, "item": title, "id": rid, 
-                        "val": val_str, "target": used_target, "msg": "✅ 合格"
                     })
                 else:
                     new_issues.append({
@@ -724,7 +719,7 @@ def python_numerical_audit(dimension_data):
                         "source": "🐍 系統判定"
                     })
             except: continue
-    return new_issues, passed_logs
+    return new_issues
     
 # --- 6. 手機版 UI 與 核心執行邏輯 ---
 st.title("🏭 交貨單稽核")
@@ -950,7 +945,7 @@ if st.session_state.photo_gallery:
 
         # --- ✅ 修改點 1：現在會回傳「異常清單」和「合格紀錄」兩個變數 ---
         dim_data = res_main.get("dimension_data", [])
-        python_numeric_issues, python_passed_logs = python_numerical_audit(dim_data)
+        python_numeric_issues = python_numerical_audit(dim_data)
         # -------------------------------------------------------
 
         # 3. 執行 Python 表頭檢查
@@ -980,7 +975,6 @@ if st.session_state.photo_gallery:
             "total_out": res_main.get("_token_usage", {}).get("output", 0),
             "ocr_duration": ocr_duration,
             "time_eng": time_main,
-            "python_passed_logs": python_passed_logs,  # <--- 存入這行
             "full_text_for_search": full_text_for_search,
             "combined_input": combined_input,
             "python_debug_data": python_debug_data
@@ -1032,15 +1026,6 @@ if st.session_state.photo_gallery:
                 st.caption("無匹配規則")
             else:
                 st.markdown(rules_text)
-                
-                # --- 新增：第三個 Debug 展開頁 ---
-        with st.expander("🐍 查看 Python 硬邏輯核對明細 (Passed/Audit Info)", expanded=False):
-            passed_data = cache.get('python_passed_logs', [])
-            if passed_data:
-                st.write("以下為系統判定「合格」的項目明細，可用於檢查 AI 提取的標準是否正確：")
-                st.dataframe(passed_data, use_container_width=True, hide_index=True)
-            else:
-                st.caption("無合格判定紀錄。")
 
         with st.expander("🐍 查看 Python 硬邏輯偵測結果 (Debug)", expanded=False):
             if cache.get('python_debug_data'):
