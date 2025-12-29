@@ -943,11 +943,6 @@ if st.session_state.photo_gallery:
             
         status.text("總稽核 Agent 正在進行全方位分析...")
         
-        # --- 單一代理執行 ---
-        t0 = time.time()
-        # 呼叫合併後的 Agent
-        res_main = agent_unified_check(combined_input, full_text_for_search, GEMINI_KEY, main_model_name)
-        
         # 1. 執行 AI 分析
         t0 = time.time()
         res_main = agent_unified_check(combined_input, full_text_for_search, GEMINI_KEY, main_model_name)
