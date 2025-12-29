@@ -612,11 +612,13 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
 def python_numerical_audit(dimension_data):
     new_issues = []
     import re
+    
+    if not dimension_data:
+        return new_issues
 
     for item in dimension_data:
         rid_list = item.get("data", [])
-        raw_spec = item.get("std_spec", "")
-        logic_instr = item.get("logic_instruction", "")
+        raw_spec = str(item.get("std_spec", ""))
         title = item.get("item_title", "")
         category = item.get("category", "")
         page_num = item.get("page", "?")
