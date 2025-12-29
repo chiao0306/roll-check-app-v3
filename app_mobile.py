@@ -604,12 +604,6 @@ def python_numerical_audit(dimension_data):
                 is_two_dec = "." in val_str and len(val_str.split(".")[-1]) == 2
                 is_passed, reason, t_used = True, "", "N/A"
 
-            try:
-                val = float(val_str)
-                is_pure_int = "." not in val_str
-                is_two_dec = "." in val_str and len(val_str.split(".")[-1]) == 2
-                is_passed, reason, t_used = True, "", "N/A"
-
                 # --- 1. 未再生本體 (最大 mm 門檻值邏輯) ---
                 if cat == "未再生本體":
                     t_used = max(clean_std) if clean_std else 196.0
