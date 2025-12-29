@@ -1004,14 +1004,17 @@ if st.session_state.photo_gallery:
             i['source'] = '🤖 總稽核 AI'
             i_type = i.get("issue_type", "")
             
-            # 保留：會計(統計/數量)、流程(順序/依賴)、表頭、豁免等 AI 擅長的判斷
-            keep_kws = ["統計", "數量", "流程", "依賴", "表頭", "運費", "未匹配"]
-            if any(kw in i_type for kw in keep_kws):
+            # 【保留】會計統計、數量不符、物理順序、幽靈工件、運費、表頭、未匹配規則
+            # 只要不是單純的「數值、尺寸、格式」，通通保留 AI 的判斷
+            ai_keywords = ["統計", "數量", "不符", "流程", "順序", "幽靈", "依賴", "表頭", "運費", "未匹配"]
+            if any(kw in i_type for kw in ai_keywords):
                 ai_filtered_issues.append(i)
-            # 過濾：純數值判斷 (交給上面的 Python 引擎)
-            elif "數值" not in i_type and "尺寸" not in i_type:
+            # 【過濾】如果 AI 回報的是「尺寸、數值、格式」異常，我們就把它丟掉，改用 Python 算出來的
+            elif "數值" not in i_type and "尺寸" not in i_type and "格式" not in i_type:
                 ai_filtered_issues.append(i)
             
+        # 最終合併：AI(會計/流程) + Python(精準規格) + Python(表頭)
+        python_header_issues, _ = python_header_check(st.session_state.photo_gallery)
         all_issues = ai_filtered_issues + python_numeric_issues + python_header_issues
         
         st.session_state.analysis_result_cache = {
