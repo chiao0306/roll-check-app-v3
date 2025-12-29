@@ -970,8 +970,7 @@ if st.session_state.photo_gallery:
             
         all_issues = ai_filtered_issues + python_numeric_issues + python_header_issues
 
-        # --- ✅ 修改點 2：在快取中多存入 python_passed_logs ---
-        total_end = time.time() 
+        # --- ✅ 修改點 2：在快取中多存入 python_passed_logs --- 
         st.session_state.analysis_result_cache = {
             "job_no": res_main.get("job_no", "Unknown"),
             "all_issues": all_issues,
