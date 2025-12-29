@@ -603,14 +603,19 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
         # 6. 注入 Token 用量
         final_response["_token_usage"] = {"input": usage_in, "output": usage_out}
         
-        return final_response      
-        
-        except Exception as e:
+        return final_response
+
+    except Exception as e:
+        # 這個 except 必須對齊上面的 try
         return {"job_no": "Error", "issues": [{"item": "System Error", "common_reason": str(e)}], "_token_usage": {"input": 0, "output": 0}}
-            
+
+# --- 重點：下面這個 def 必須完全貼齊左邊牆壁 (0個空格) ---
 def python_numerical_audit(dimension_data):
     new_issues = []
     import re
+    
+    if not dimension_data:
+        return new_issues
 
     for item in dimension_data:
         rid_list = item.get("data", [])
@@ -622,6 +627,7 @@ def python_numerical_audit(dimension_data):
 
         # 解析標準值 (從文字抓數字)
         try:
+            # 優先從 Standard_Spec 抓數字
             target_val = float(re.findall(r"\d+\.?\d*", str(raw_spec))[0])
         except:
             target_val = 196.0 
@@ -642,28 +648,25 @@ def python_numerical_audit(dimension_data):
                 reason = ""
 
                 # --- 1. 未再生車修 (本體) ---
-                if category == "未再生車修":
-                    # 規則：<= 規格 須為整數； > 規格 須為 #.##
+                # 邏輯：<= 標準 須為整數； > 標準 須為兩位小數
+                if "未再生" in category or "未再生" in title:
                     if val <= target_val:
                         if not is_pure_int:
                             is_passed = False
                             reason = f"未再生(<=標準): 格式錯誤，應為整數 (實測:{val_str})"
-                    else: # val > target_val
+                    else: 
                         if not is_two_decimal:
                             is_passed = False
                             reason = f"未再生(>標準): 格式錯誤，應為兩位小數 (實測:{val_str})"
 
-                # --- 2. 精加工 / 再生 / 研磨 (排除未再生後的情況) ---
-                elif category == "精加工再生":
-                    # 規則：必須為兩位小數 #.##，且要在區間內 (通常 Excel 會給區間)
+                # --- 2. 精加工 / 再生 / 研磨 (排除未再生) ---
+                elif any(x in category for x in ["再生", "研磨", "精加工"]) and "未再生" not in title:
                     if not is_two_decimal:
                         is_passed = False
                         reason = f"精加工/再生: 格式錯誤，應為兩位小數 (實測:{val_str})"
-                    # 這裡可以視情況增加區間判斷
 
                 # --- 3. 軸頸未再生 ---
-                elif category == "軸頸未再生":
-                    # 規則：必須為整數，且 <= 規格上限
+                elif "軸頸" in category and "未再生" in category:
                     if not is_pure_int:
                         is_passed = False
                         reason = f"軸頸未再生: 應為整數格式 (實測:{val_str})"
@@ -671,9 +674,8 @@ def python_numerical_audit(dimension_data):
                         is_passed = False
                         reason = f"軸頸未再生: 超出規格上限 {target_val}"
 
-                # --- 4. 銲補 (加肉製程) ---
-                elif category == "銲補":
-                    # 規則：必須為整數，且 >= 規格下限
+                # --- 4. 銲補 ---
+                elif "銲補" in category:
                     if not is_pure_int:
                         is_passed = False
                         reason = f"銲補: 應為整數格式 (實測:{val_str})"
@@ -682,8 +684,7 @@ def python_numerical_audit(dimension_data):
                         reason = f"銲補: 低於規格下限 {target_val}"
 
                 # --- 5. 組裝 / 真圓度 ---
-                elif category == "組裝":
-                    # 規則：絕對值 <= 規格(預設0.1)，兩位小數
+                elif "組裝" in category or "真圓度" in title:
                     if abs(val) > target_val:
                         is_passed = False
                         reason = f"組裝/真圓度: 數值超出範圍 (實測:{val_str}, 標準:{target_val})"
