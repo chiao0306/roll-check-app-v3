@@ -710,7 +710,6 @@ def python_numerical_audit(dimension_data):
                     else:
                         used_target = "未偵測到規格數字"
 
-                    })
                 else:
                     new_issues.append({
                         "page": page_num, "item": title, "issue_type": "數值異常(系統判定)",
