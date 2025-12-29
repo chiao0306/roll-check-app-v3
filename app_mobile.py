@@ -605,6 +605,9 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
         
         return final_response      
         
+        except Exception as e:
+        return {"job_no": "Error", "issues": [{"item": "System Error", "common_reason": str(e)}], "_token_usage": {"input": 0, "output": 0}}
+        
     def python_numerical_audit(dimension_data):
     new_issues = []
     import re
@@ -702,9 +705,6 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
                 continue
     return new_issues
     
-    except Exception as e:
-        return {"job_no": "Error", "issues": [{"item": "System Error", "common_reason": str(e)}], "_token_usage": {"input": 0, "output": 0}}
-
 # --- 6. 手機版 UI 與 核心執行邏輯 ---
 st.title("🏭 交貨單稽核")
 
