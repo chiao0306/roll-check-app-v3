@@ -603,10 +603,9 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
         # 6. 注入 Token 用量
         final_response["_token_usage"] = {"input": usage_in, "output": usage_out}
         
-        return final_response
+        return final_response      
         
-def python_numerical_audit(dimension_data):
-        new_issues = []
+def python_numerical_audit(dimension_data):new_issues = []
         import re
     
         for item in dimension_data:
