@@ -644,7 +644,7 @@ def python_numerical_audit(dimension_data):
 
         # --- 1. 改良版：提取規格中的「最大尺寸」作為基準 ---
         # 例如從 "每次車修直徑0.5~2mm,至196mm再生" 提取出 [0.5, 2, 196]
-        all_nums = re.findall(r"\d+\.?\d*", raw_spec)
+            all_nums = re.findall(r"\d+\.?\d*", raw_spec)
         try:
             # 取最大值 (如 196)，這樣就能自動忽略前面的 0.5 或 2
             target_val = max([float(n) for n in all_nums])
