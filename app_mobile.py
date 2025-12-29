@@ -398,11 +398,75 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
 
     system_prompt = f"""
     你是一位極度嚴謹的中鋼機械品管【總稽核官】。
-    你的大腦運作必須像「電腦程式」一樣，嚴格遵守以下的「法律階級」與「執行流程」。
-    完全依照規則，禁止自己解釋。
+    你必須像「電腦程式」一樣執行以下雙模組稽核，禁止任何主觀解釋。
+
+    {dynamic_rules}
     
     ---
 
+    ### ⚖️ 判決憲法 (Hierarchy of Authority)
+    1. **[第一區：專案特定規則]** 為最高準則。
+    2. **[第二區：通用邏輯]** 為全廠物理法則，預設開啟，除非特規寫明「豁免」。
+    3. **[雙軌判定]**：數值規格由 Python 硬邏輯判定；統計加總與物理流程由 AI 判定。
+
+    ---
+
+    ### 🚀 執行程序 (Execution Procedure)
+
+    #### ⚔️ 模組 A：工程尺寸提取 (供系統複核)
+    請精確抄錄各頁數據。**嚴禁跨頁腦補，只抄錄當前頁面數字。**
+    1. **解析標準**：
+       - **std_max**: 提取單一門檻值（如：至 196mm 為止）。
+       - **std_list**: 列表。提取所有獨立上限（如：143, 163）。**嚴禁**將實測數據誤入此區。
+       - **std_ranges**: 列表之列表。若有 `±` 或偏差（如 200+0.5），**請 AI 先行計算出最終範圍** [min, max]。
+       - **⚠️ 銲補/加肉**：銲補製程尺寸增加是物理正常的，嚴禁以此報「流程異常」。
+    2. **分類分類 (category)**：
+       - 標題含「未再生」且不含「軸頸」 -> `未再生本體`
+       - 標題含「未再生」且含「軸頸」 -> `軸頸未再生`
+       - 標題含「銲補」 -> `銲補`
+       - 其餘（再生、研磨、精加工、組裝） -> `精加工再生`
+
+    #### 💰 模組 B：會計數量與物理流程稽核 (由 AI 判定)
+    1. **單項計算**：核對括號內 PC 數與內文行數。本體去重，軸頸每編號最多2次。
+    2. **總表加總 (Global Check)**：
+       - **聚合模式**：若標題含「機ROLL車修/銲補/拆裝」，執行 Sum(本體+軸頸)。
+       - **標準模式**：其餘項目僅加總名稱對應的子項。
+    3. **物理順序與依賴**：車修應「前段 >= 後段」；銲補應「前段 <= 後段」。
+
+    ---
+
+    ### 📝 輸出規範 (Output Format)
+    必須回傳單一 JSON。異常統計必須「逐行拆分」來源項目與頁碼。
+
+    {{
+      "job_no": "工令編號",
+      "issues": [ 
+         {{
+           "page": "頁碼",
+           "item": "項目名稱",
+           "issue_type": "統計不符 / 流程異常",
+           "common_reason": "失敗原因 (15字內)",
+           "failures": [
+              {{ "id": "🔍 統計總帳基準", "val": "目標數", "calc": "目標" }},
+              {{ "id": "項目全名 (P.頁碼)", "val": "計數", "calc": "計入加總" }},
+              {{ "id": "🧮 內文實際加總", "val": "總計", "calc": "計算" }}
+           ]
+         }}
+      ],
+      "dimension_data": [
+         {{
+           "page": "數字",
+           "item_title": "項目全名",
+           "category": "分類名稱",
+           "std_max": "數字", 
+           "std_list": [],
+           "std_ranges": [],
+           "std_spec": "原始規格文字",
+           "data": [ {{ "id": "滾輪編號", "val": "實測值(字串，禁變動位數)" }} ]
+         }}
+      ]
+    }}
+    """
     ### ⚖️ 判決憲法 (Hierarchy of Authority)
     **請注意：判定標準分為「數據層」與「邏輯層」，兩者必須同時成立。**
 
@@ -653,10 +717,12 @@ def python_numerical_audit(dimension_data):
         page_num = item.get("page", "?")
         raw_spec = str(item.get("std_spec", ""))
         
-        # --- 核心修正：針對「未再生本體」強制掃描文字抓最大值 ---
-        # 即使 AI 提取了 std_max，我們也重新從原始文字抓取所有數字來比對
-        all_nums_in_spec = [float(n) for n in re.findall(r"\d+\.?\d*", raw_spec)]
-        
+        # --- 🛡️ 數據清洗濾鏡：過濾機號、型號雜訊 ---
+        all_raw_nums = [float(n) for n in re.findall(r"\d+\.?\d*", raw_spec)]
+        # 濾掉 1,2,3,4,6 號機，濾掉常見輥輪型號 300, 350
+        noise = [1.0, 2.0, 3.0, 4.0, 6.0, 300.0, 350.0]
+        clean_std = [n for n in all_raw_nums if n not in noise and n > 5] # 小於5的通常是加工量，排除
+
         for entry in rid_list:
             rid = entry.get("id")
             val_str = str(entry.get("val", "")).strip()
@@ -668,75 +734,61 @@ def python_numerical_audit(dimension_data):
                 is_two_dec = "." in val_str and len(val_str.split(".")[-1]) == 2
                 is_passed = True
                 reason = ""
+                target_used = "N/A"
 
-                 # --- 1. 未再生本體 (依照三準則 + 強制最大值) ---
-                if cat == "未再生本體" or ("未再生" in title and "軸頸" not in title):
-                    # 強制取規格內所有數字的最大值 (解決 294 vs 285 問題)
-                    target = max(all_nums_in_spec) if all_nums_in_spec else 196.0
-                    
-                    if val <= target:
+                # --- 1. 未再生本體 (最大值基準 + 三準則) ---
+                if cat == "未再生本體":
+                    target_used = max(clean_std) if clean_std else 196.0
+                    if val <= target_used:
                         if not is_pure_int:
-                            is_passed = False
-                            reason = f"未再生本體(<=標準{target}): 應為整數格式"
+                            is_passed, reason = False, f"未再生(<=標準{target_used}): 應為整數"
                     else: # val > target
-                        if is_two_dec:
-                            is_passed = True # 合格
-                        elif is_pure_int:
-                            is_passed = False
-                            reason = f"未再生本體(>標準{target}): 超出標準禁填整數，應填兩位小數"
-                        else:
-                            is_passed = False
-                            reason = f"未再生本體(>標準{target}): 格式錯誤，應為 #.##"
+                        if is_two_dec: is_passed = True
+                        elif is_pure_int: is_passed, reason = False, f"未再生(>標準{target_used}): 超規禁填整數，應填兩位小數"
+                        else: is_passed, reason = False, f"未再生(>標準{target_used}): 格式錯誤，應為#.##"
 
-                # --- 2. 軸頸未再生 (整數 + 上限) ---
+                # --- 2. 軸頸未再生 (整數 + 最大值基準) ---
                 elif cat == "軸頸未再生":
-                    target = max(s_list) if s_list else (s_max if s_max else 0)
+                    target_used = max(clean_std) if clean_std else 0
                     if not is_pure_int:
-                        is_passed = False
-                        reason = "軸頸未再生: 應為純整數格式"
-                    elif target > 0 and val > target:
-                        is_passed = False
-                        reason = f"軸頸未再生: 超出規格上限 {target}"
+                        is_passed, reason = False, "軸頸未再生: 應為純整數格式"
+                    elif target_used > 0 and val > target_used:
+                        is_passed, reason = False, f"軸頸未再生: 超出上限 {target_used}"
 
-                # --- 3. 精加工 / 再生 / 研磨 (兩位小數 + 多重區間任一符合) ---
+                # --- 3. 精加工再生類 (兩位小數 + 區間判斷) ---
                 elif cat == "精加工再生":
                     if not is_two_dec:
-                        is_passed = False
-                        reason = "精加工/再生: 格式錯誤，應為兩位小數"
-                    elif s_ranges:
-                        # 檢查是否符合任一個區間
-                        if not any(r[0] <= val <= r[1] for r in s_ranges if len(r)==2):
-                            is_passed = False
-                            reason = f"精加工: 數值不在規範區間內 {s_ranges}"
-                    elif s_list:
-                        if val > max(s_list):
-                            is_passed = False
-                            reason = f"精加工: 超出上限標準 {max(s_list)}"
+                        is_passed, reason = False, "精加工: 格式錯誤，應為兩位小數"
+                    elif clean_std:
+                        # 處理 ± 或 區間：若有兩個數字則取 min/max 區間
+                        if len(clean_std) >= 2:
+                            s_min, s_max = min(clean_std), max(clean_std)
+                            target_used = f"{s_min}~{s_max}"
+                            if not (s_min <= val <= s_max):
+                                is_passed, reason = False, f"精加工: 不在區間內 {target_used}"
+                        else: # 只有一個數字則視為上限
+                            target_used = clean_std[0]
+                            if val > target_used:
+                                is_passed, reason = False, f"精加工: 超出上限 {target_used}"
 
-                # --- 4. 銲補 (整數 + 就近匹配下限) ---
+                # --- 4. 銲補 (整數 + 就近匹配基準) ---
                 elif cat == "銲補":
                     if not is_pure_int:
-                        is_passed = False
-                        reason = "銲補: 格式錯誤，應為純整數格式"
-                    elif s_list:
-                        # 核心：就近匹配基準
-                        match_target = min(s_list, key=lambda x: abs(x - val))
-                        if val < match_target:
-                            is_passed = False
-                            reason = f"銲補: 數值不足，低於匹配基準 {match_target}"
+                        is_passed, reason = False, "銲補: 格式錯誤，應為純整數"
+                    elif clean_std:
+                        # 核心功能：尋找最靠近實測值的規格作為下限
+                        target_used = min(clean_std, key=lambda x: abs(x - val))
+                        if val < target_used:
+                            is_passed, reason = False, f"銲補不足: 實測 {val} 低於匹配基準 {target_used}"
 
                 if not is_passed:
                     new_issues.append({
-                        "page": page_num,
-                        "item": title,
-                        "issue_type": "數值異常(系統判定)",
-                        "rule_used": f"Excel: {raw_spec}",
-                        "common_reason": reason,
-                        "failures": [{"id": rid, "val": val_str, "target": "符合規範", "calc": "🐍 系統判定"}],
+                        "page": page_num, "item": title, "issue_type": "數值異常(系統判定)",
+                        "rule_used": f"Excel: {raw_spec}", "common_reason": reason,
+                        "failures": [{"id": rid, "val": val_str, "target": f"基準:{target_used}", "calc": "🐍 系統硬核判定"}],
                         "source": "🐍 系統判定"
                     })
-            except:
-                continue
+            except: continue
     return new_issues
     
 # --- 6. 手機版 UI 與 核心執行邏輯 ---
@@ -999,25 +1051,29 @@ if st.session_state.photo_gallery:
         # --- 3. Python 表頭檢查 (原有功能) ---
         python_header_issues, python_debug_data = python_header_check(st.session_state.photo_gallery)
         
-        # --- 4. 合併所有結果 ---
+        # --- 4. 合併結果 ---
         ai_raw_issues = res_main.get("issues", [])
         ai_filtered_issues = []
 
         for i in ai_raw_issues:
             i['source'] = '🤖 總稽核 AI'
             i_type = i.get("issue_type", "")
+            common_reason = i.get("common_reason", "")
+
+            # 💡 全方位防護：
+            # 1. 攔截 AI 對「銲補」尺寸變大的誤判 (因為銲補本來就會變大)
+            if "銲補" in i.get("item", "") and "增加尺寸" in common_reason:
+                continue
             
-            # 【保留】會計統計、數量不符、物理順序、幽靈工件、運費、表頭、未匹配規則
-            # 只要不是單純的「數值、尺寸、格式」，通通保留 AI 的判斷
-            ai_keywords = ["統計", "數量", "不符", "流程", "順序", "幽靈", "依賴", "表頭", "運費", "未匹配"]
-            if any(kw in i_type for kw in ai_keywords):
+            # 2. 保留會計、數量、統計、運費、流程、依賴、表頭
+            keep_keywords = ["統計", "數量", "不符", "流程", "順序", "幽靈", "依賴", "表頭", "運費", "未匹配"]
+            if any(kw in i_type for kw in keep_keywords):
                 ai_filtered_issues.append(i)
-            # 【過濾】如果 AI 回報的是「尺寸、數值、格式」異常，我們就把它丟掉，改用 Python 算出來的
+                
+            # 3. 過濾掉 AI 的「數值、尺寸、格式」判斷，因為 Python 比較準
             elif "數值" not in i_type and "尺寸" not in i_type and "格式" not in i_type:
                 ai_filtered_issues.append(i)
             
-        # 最終合併：AI(會計/流程) + Python(精準規格) + Python(表頭)
-        python_header_issues, _ = python_header_check(st.session_state.photo_gallery)
         all_issues = ai_filtered_issues + python_numeric_issues + python_header_issues
         
         st.session_state.analysis_result_cache = {
