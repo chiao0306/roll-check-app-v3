@@ -405,22 +405,23 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
 
     ### 🚀 執行程序 (Execution Procedure)
 
-    #### ⚔️ 模組 A：工程尺寸提取 (數據抄錄模式)
-    你的任務是精確抄錄當前頁面表格中「每一支」滾輪的數據。**嚴禁跨頁腦補，只准抄錄當前頁面數字。**
+    #### ⚔️ 模組 A：工程尺寸數據提取 (定位規則：尋找 mm)
+    你的任務是精確抄錄當前頁面的數據。**嚴禁跨頁腦補，只准抄錄當前頁面數字。**
     
-    1. **規格文字提取 (std_spec)**：完整抄錄標題下含 `mm` 的原始規格文字。
-    2. **先行解析標準**：
-       - **std_list**: 列表。提取規格中所有單一數字（如：143, 163, 295）。**嚴禁**誤入表格數據。
-       - **std_ranges**: 列表之列表。若有 `±` 或偏差，請 AI **先行計算**最終區間。如「200 ± 0.5」提取為 `[[199.5, 200.5]]`。
-    3. **分類識別 (category)**：
+    1. **解析標準 (std_spec & dimension_data)**：
+       - **定位關鍵字**：請優先尋找包含 `mm`、`直徑`、`內徑`、`至...再生` 的文字行。
+       - **目標提取**：
+         * **範圍 (±)**：如 `300mm ± 0.1`，請計算出 `std_ranges: [[299.9, 300.1]]`。
+         * **區間 (~)**：如 `135mm ~ 129mm`，請提取 `std_ranges: [[129.0, 135.0]]`。
+         * **公差偏差 (+/-)**：如 `45mm +0, +0.039`，請計算出 `std_ranges: [[45.0, 45.039]]`。
+         * **門檻值 (以上/至)**：如 `303mm以上` 提取為 `std_list: [303.0]`；`至 295mm 再生` 提取為 `std_max: 295.0`。
+       - **⚠️ 排除干擾**：嚴禁將「每次車修直徑 0.5~5mm」這類代表加工量的數字當作「最終尺寸標準」。
+
+    2. **分類識別 (category)**：
        - A. 標題含「銲補」 -> `銲補`
        - B. 標題含「未再生」且含「軸頸」 -> `軸頸未再生`
        - C. 標題含「未再生」且不含「軸頸」 -> `未再生本體`
        - D. 其餘（再生、研磨、精加工、組裝、真圓度） -> `精加工再生`
-    4. **極簡數據抄錄 (data_string)**：
-       - 格式：`"編號:實測值, 編號:實測值"`。
-       - **範例**：`"A10:136, E07:136, V103:135"`。
-       - **禁止更動格式**：188 就寫 188，198.10 就寫 198.10。
 
     #### 💰 模組 B：會計數量與物理流程稽核 (由 AI 判定)
     1. **單項計算**：本體去重計算獨立編號，軸頸總行數計算（每編號限2次）。
@@ -433,7 +434,7 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
     ---
 
     ### 📝 輸出規範 (Output Format)
-    必須回傳單一 JSON。為了提速，數據抄錄請採用「壓縮列表」：
+    必須回傳單一 JSON。異常統計必須「逐行拆分」來源項目與頁碼。
 
     {{
       "job_no": "工令編號",
@@ -453,12 +454,13 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
       "dimension_data": [
          {{
            "page": "數字",
-           "item_title": "名稱",
-           "category": "分類",
+           "item_title": "項目全名",
+           "category": "分類名稱",
+           "std_max": "門檻值", 
            "std_list": [],
            "std_ranges": [],
-           "std_spec": "原始規格文字",
-           "data_string": "編號:數值, 編號:數值, ..." // 👈 壓縮傳輸格式
+           "std_spec": "抄錄含 mm 的原始規格文字",
+           "data": [ {{ "id": "滾輪編號", "val": "實測值(字串)" }} ]
          }}
       ]
     }}
@@ -576,38 +578,33 @@ def python_numerical_audit(dimension_data):
     if not dimension_data: return new_issues
 
     for item in dimension_data:
-        # 1. 取得數據字串並拆解
-        data_str = str(item.get("data_string", "")).strip()
-        if not data_str or ":" not in data_str:
-            continue # 如果 AI 沒抄資料，這項就跳過
-            
-        raw_entries = [pair.split(":") for pair in data_str.split(",") if ":" in pair]
-        
+        rid_list = item.get("data", [])
         title = item.get("item_title", "")
-        # 💡 分類名稱去空格且轉小寫，防止 AI 亂寫
-        cat = str(item.get("category", "")).strip()
+        cat = item.get("category", "")
         page_num = item.get("page", "?")
         raw_spec = str(item.get("std_spec", ""))
         
-        # 2. 獲取標準數字 (優先聽 AI 的 std_list，拿不到才用 Regex)
-        s_list = item.get("std_list", [])
-        if not s_list:
-            s_list = [float(n) for n in re.findall(r"\d+\.?\d*", raw_spec)]
-            
-        # 清洗標準值 (過濾掉機號、輥輪型號等雜訊數字)
-        clean_std = [n for n in s_list if n > 10 and n not in [350.0, 300.0, 200.0]]
+        # --- 🛡️ 數據清洗與 mm 定位邏輯 ---
+        # 尋找所有靠近 mm 的數字
+        all_nums = [float(n) for n in re.findall(r"\d+\.?\d*", raw_spec)]
+        # 排除 1~10 的小數字(機號/項次)，排除常用的型號雜訊 (350, 300)
+        clean_std = [n for n in all_nums if n > 10 and n not in [350.0, 300.0, 200.0]]
+        
+        # 獲取 AI 解析的區間
         s_ranges = item.get("std_ranges", [])
 
-        for entry in raw_entries:
-            if len(entry) < 2: continue
-            rid, val_str = entry[0].strip(), entry[1].strip()
-            if not val_str or val_str in ["N/A", "nan"]: continue
+        for entry in rid_list:
+            rid = entry.get("id")
+            val_str = str(entry.get("val", "")).strip()
+            if not val_str or val_str in ["N/A", "nan", ""]: continue
 
             try:
                 val = float(val_str)
                 is_pure_int = "." not in val_str
                 is_two_dec = "." in val_str and len(val_str.split(".")[-1]) == 2
-                is_passed, reason, t_used = True, "", "N/A"
+                is_passed = True
+                reason = ""
+                t_used = "N/A"
 
                 # --- 1. 未再生本體 (最大 mm 門檻值邏輯) ---
                 if cat == "未再生本體":
@@ -649,7 +646,7 @@ def python_numerical_audit(dimension_data):
                     new_issues.append({
                         "page": page_num, "item": title, "issue_type": "數值異常(系統判定)",
                         "rule_used": f"Excel: {raw_spec}", "common_reason": reason,
-                        "failures": [{"id": rid, "val": val_str, "target": f"基準:{t_used}", "calc": "🐍 Python 判定"}],
+                        "failures": [{"id": rid, "val": val_str, "target": "符合規範", "calc": "🐍 Python 判定"}],
                         "source": "🐍 系統判定"
                     })
             except: continue
@@ -922,17 +919,20 @@ if st.session_state.photo_gallery:
         for i in ai_raw_issues:
             i['source'] = '🤖 總稽核 AI'
             i_type = i.get("issue_type", "")
-            reason = i.get("common_reason", "")
+            common_reason = i.get("common_reason", "")
+
+            # 💡 全方位防護：
+            # 1. 攔截 AI 對「銲補」尺寸變大的誤判 (因為銲補本來就會變大)
+            if "銲補" in i.get("item", "") and "增加尺寸" in common_reason:
+                continue
             
-            # 關鍵過濾：只要 AI 想評論「尺寸、數值、格式、大於、小於」，通通閉嘴
-            num_keywords = ["數值", "尺寸", "格式", "大於", "小於", "超規", "不足", "規範", "<", ">"]
-            if any(kw in reason or kw in i_type for kw in num_keywords):
-                # 只有統計統計、PC數量相關的除外
-                if "統計" in i_type or "數量" in i_type:
-                    ai_filtered_issues.append(i)
-                else:
-                    continue # 丟棄 AI 的數值判斷
-            else:
+            # 2. 保留會計、數量、統計、運費、流程、依賴、表頭
+            keep_keywords = ["統計", "數量", "不符", "流程", "順序", "幽靈", "依賴", "表頭", "運費", "未匹配"]
+            if any(kw in i_type for kw in keep_keywords):
+                ai_filtered_issues.append(i)
+                
+            # 3. 過濾掉 AI 的「數值、尺寸、格式」判斷，因為 Python 比較準
+            elif "數值" not in i_type and "尺寸" not in i_type and "格式" not in i_type:
                 ai_filtered_issues.append(i)
             
         all_issues = ai_filtered_issues + python_numeric_issues + python_header_issues
