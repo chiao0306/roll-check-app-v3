@@ -479,58 +479,43 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
 
     ---
     
-    ### 📝 輸出規範 (Output Format)
-    **請根據異常類型，選擇對應的 `failures` 表格格式：**
-   
-    1. 異常回報區 (issues)
-    當 AI 發現以下異常時，請填入此區，並根據類型選擇 failures 格式：
+   ### 📝 輸出規範 (Output Format)
+    必須回傳單一 JSON 物件，包含 `issues` (會計與流程) 與 `dimension_data` (數值提取)。
 
-    #### 🛠️ A. 工程規格/流程異常 (Engineering Mode)
-    *   **適用類型：數值超規、尺寸異常、物理流程錯誤、格式錯誤。
-    *   **表格欄位填寫規範**：
-        - `id`: "滾輪編號" (例如：#1)
-        - `val`: "實測值" (例如：295.05)
-        - `target`: "Excel 標準" (例如：294.00 - 295.00)
-        - `calc`: "[數據層推導]" (範例：實測 198.10 > 規格 196.00，且符合兩位小數格式，依 Excel 特規判定為 PASS)
+    #### 1. 異常回報區 (`issues`)
+    - **必填**：請在此處執行【會計數量核對】。若總表與內文不符，必須依照「三行法」填寫 `failures`。
+    - **注意**：這裡只放會計、物理流程（順序）、運費、表頭異常。
 
-    #### 💰 B. 會計數量/統計異常 (Accounting Mode)
-    *   **適用類型**：數量不符、統計不符。
-    *   **表格欄位定義 (三行法)**：
-        - 第一行：{{ "id": "🔍 統計基準", "val": "總表目標值", "calc": "目標總量" }}
-        - 證據行：{{ "id": "項目名稱 (P.頁碼)", "val": "該項數量", "calc": "計入加總" }}
-        - 最後行：{{ "id": "🧮 內文加總", "val": "你的計算結果", "calc": "計算總量" }}
-
-    2. 數據提取區 (dimension_data) - [Python 硬核判定專用]
-    *   **請精確抄錄表格中「所有項目」的數值與規格，交由系統後台進行尺寸與格式判定：
-        -std_min / std_max: 請 AI 先解析規格文字（如「203.22 +0.3, +0.8」應算出 min:203.52, max:204.02）。
-        -category: 請歸類為 [未再生車修 / 精加工再生 / 軸頸未再生 / 銲補 / 組裝]。
-
-    請回傳 JSON。除了 `issues`，必須包含 `dimension_data` 給 Python 判定：
+    #### 2. 數據提取區 (`dimension_data`)
+    - **std_max**: 關鍵標準值。例如「至 196mm 再生」請提取 `196.0`。若無規範請填 `null`。
+    - **category**: 若項目名稱有「未再生」則必填 `未再生車修`。
 
     {{
       "job_no": "工令編號",
-      "issues": [
+      "issues": [ 
          {{
            "page": "頁碼",
-           "item": "項目名稱",
-           "rule_used": "特規名稱/通用規則",
-           "issue_type": "數值超規 / 流程異常 / 統計不符",
-           "spec_logic": "判定標準 (簡述)",
-           "common_reason": "失敗原因 (15字內)",
-           "failures": []  // 依照上方 A 或 B 格式填寫
+           "item": "會計/流程項目",
+           "issue_type": "統計不符 / 流程異常",
+           "common_reason": "失敗原因",
+           "failures": [
+              {{ "id": "🔍 統計基準", "val": "總表數", "calc": "目標" }},
+              {{ "id": "🧮 內文加總", "val": "計算數", "calc": "實際" }}
+           ]
+         }}
+      ],
+      "dimension_data": [
+         {{
+           "page": "頁碼",
+           "item_title": "項目完整名稱",
+           "category": "未再生車修",
+           "std_max": 196.0,
+           "data": [
+             {{ "id": "滾輪編號", "val": "294.05" }}
+           ]
          }}
       ]
     }}
-     "dimension_data": [
-        {{
-          "page": 頁碼,
-          "item_title": "項目完整名稱",
-          "category": "未再生車修 / 精加工再生 / 軸頸未再生 / 銲補 / 組裝",
-          "std_spec": "Excel中的Standard_Spec",
-          "logic_instruction": "Excel中的Logic_Prompt",
-          "data": [ {{"id": "20S71", "val": "188"}} ]
-        }}
-     ]
     
     """
     
@@ -641,22 +626,30 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
         return {"job_no": "Error", "issues": [{"item": "System Error", "common_reason": str(e)}], "_token_usage": {"input": 0, "output": 0}}
 
 def python_numerical_audit(dimension_data):
+    """
+    Python 硬核判定引擎：處理 196mm 特殊規則、銲補下限、精加工格式
+    """
     new_issues = []
+    import re
+    
     if not dimension_data:
         return new_issues
 
     for item in dimension_data:
         rid_list = item.get("data", [])
         title = item.get("item_title", "")
-        category = item.get("category", "")
+        cat = item.get("category", "")
         page_num = item.get("page", "?")
+        raw_spec = str(item.get("std_spec", ""))
         
-        # 讀取 AI 解析出的上下限
-        try:
-            s_min = float(item.get("std_min", 0))
-            s_max = float(item.get("std_max", 9999))
-        except:
-            s_min, s_max = 0, 9999
+        # 1. 取得標準值 (s_max)
+        s_max = item.get("std_max")
+        if s_max is None: 
+            # 如果 AI 沒抓到數字，嘗試從文字中再抓一次保險
+            nums = re.findall(r"\d+\.?\d*", raw_spec)
+            s_max = float(max([float(n) for n in nums])) if nums else 196.0
+        else:
+            s_max = float(s_max)
 
         for entry in rid_list:
             rid = entry.get("id")
@@ -665,62 +658,83 @@ def python_numerical_audit(dimension_data):
 
             try:
                 val = float(val_str)
-                # 判定格式
+                # 判定格式：純整數 (無小數點)
                 is_pure_int = "." not in val_str
+                # 判定格式：兩位小數 (#.##)
                 is_two_decimal = "." in val_str and len(val_str.split(".")[-1]) == 2
+                
                 is_passed = True
                 reason = ""
 
-                # --- 1. 未再生車修 (本體三準則) ---
-                if "未再生" in category or "未再生" in title:
-                    # 使用 s_max (通常是 196) 作為判定點
-                    if val <= s_max:
+                # --- 核心邏輯 A：未再生車修 (依照您的三準則) ---
+                if "未再生" in cat or "未再生" in title:
+                    if "軸頸" not in title and "軸頸" not in cat:
+                        # 準則 1：實測 <= 規格 -> 必須為整數
+                        if val <= s_max:
+                            if not is_pure_int:
+                                is_passed = False
+                                reason = f"未再生(<=標準{s_max}): 低於或等於標準時必須為[整數格式]"
+                        # 準則 2 & 3：實測 > 規格
+                        else:
+                            if is_two_decimal:
+                                is_passed = True # 合格
+                            elif is_pure_int:
+                                is_passed = False
+                                reason = f"未再生(>標準{s_max}): 超出標準時[禁止使用整數]，應為兩位小數格式"
+                            else:
+                                is_passed = False
+                                reason = f"未再生(>標準{s_max}): 格式錯誤，應為 #.## 兩位小數"
+
+                    # --- 軸頸未再生 (自動就近比對規格) ---
+                    else:
+                        nums = [float(n) for n in re.findall(r"\d+\.?\d*", raw_spec)]
+                        target = min(nums, key=lambda x: abs(x - val)) if nums else s_max
                         if not is_pure_int:
                             is_passed = False
-                            reason = f"未再生(<=標準{s_max}): 應為整數"
-                    else: # > s_max
-                        if not is_two_decimal:
+                            reason = f"軸頸未再生: 應為整數格式 (實測:{val_str})"
+                        elif val > target:
                             is_passed = False
-                            reason = f"未再生(>標準{s_max}): 應為兩位小數"
+                            reason = f"軸頸未再生: 超出匹配標準 {target}"
 
-                # --- 2. 精加工 / 再生 / 研磨 / 組裝 (區間判定 + 兩位小數) ---
-                elif any(x in category or x in title for x in ["再生", "研磨", "精加工", "組裝", "拆裝"]):
+                # --- 核心邏輯 B：銲補 (✅ 補回：必須是整數 且 需大於等於下限) ---
+                elif "銲補" in cat or "銲補" in title:
+                    if not is_pure_int:
+                        is_passed = False
+                        reason = f"銲補: [格式錯誤] 銲補製程應為整數格式 (實測:{val_str})"
+                    elif val < s_max:
+                        is_passed = False
+                        reason = f"銲補: [數值不足] 低於規格下限 {s_max}"
+
+                # --- 核心邏輯 C：精加工 / 再生 / 研磨 ---
+                elif any(x in cat for x in ["再生", "研磨", "精加工"]):
                     if not is_two_decimal:
                         is_passed = False
-                        reason = f"格式錯誤: 應為兩位小數 (#.##)"
-                    elif not (s_min <= val <= s_max):
-                        is_passed = False
-                        reason = f"數值超規: 不在區間 {s_min} ~ {s_max} 內"
+                        reason = "精加工/再生: 應為兩位小數格式 (#.##)"
+                    # 若為區間規則 (Excel 有兩個數字)
+                    nums = [float(n) for n in re.findall(r"\d+\.?\d*", raw_spec)]
+                    if len(nums) >= 2:
+                        s_min, s_max_range = min(nums), max(nums)
+                        if not (s_min <= val <= s_max_range):
+                            is_passed = False
+                            reason = f"精加工: 不在規格區間 {s_min}~{s_max_range}"
 
-                # --- 3. 軸頸未再生 (整數 + 上限) ---
-                elif "軸頸" in category or "軸頸" in title:
-                    if not is_pure_int:
+                # --- 核心邏輯 D：組裝 / 真圓度 ---
+                elif "組裝" in cat or "組裝" in title:
+                    if abs(val) > s_max:
                         is_passed = False
-                        reason = "軸頸未再生: 應為整數格式"
-                    elif val > s_max:
+                        reason = f"組裝: 超出公差範圍 {s_max}"
+                    elif not is_two_decimal:
                         is_passed = False
-                        reason = f"軸頸未再生: 超過上限 {s_max}"
-
-                # --- 4. 銲補 (整數 + 就近匹配下限判定) ---
-                elif "銲補" in category or "銲補" in title:
-                    # 規則：若有兩個規範值，選靠近的那個做下限
-                    target_val = s_min if abs(val - s_min) < abs(val - s_max) else s_max
-                    
-                    if not is_pure_int:
-                        is_passed = False
-                        reason = "銲補: 應為整數格式"
-                    elif val < target_val:
-                        is_passed = False
-                        reason = f"銲補: 低於匹配下限 {target_val}"
+                        reason = "組裝: 應為兩位小數格式"
 
                 if not is_passed:
                     new_issues.append({
                         "page": page_num,
                         "item": title,
                         "issue_type": "數值異常(Python判定)",
-                        "rule_used": f"標準: {s_min} ~ {s_max}",
+                        "rule_used": f"Excel標準: {raw_spec}",
                         "common_reason": reason,
-                        "failures": [{"id": rid, "val": val_str, "target": f"{s_min}~{s_max}", "calc": "Python硬核判定"}],
+                        "failures": [{"id": rid, "val": val_str, "target": f"標準:{s_max}", "calc": "🐍 系統判定"}],
                         "source": "🐍 系統判定"
                     })
             except:
@@ -993,20 +1007,17 @@ if st.session_state.photo_gallery:
 
         for i in ai_raw_issues:
             i['source'] = '🤖 總稽核 AI'
-            # 💡 改良過濾邏輯：
-            # 只有當 issue_type「完全等於」數值超規或尺寸異常時才過濾
-            # 如果是「統計不符」、「數量不符」、「運費錯誤」，必須保留！
-            
             i_type = i.get("issue_type", "")
-            if "數值" in i_type or "尺寸" in i_type or "格式" in i_type:
-                # 這些交給 Python 了，所以跳過 AI 的報錯
-                continue
-            else:
-                # 會計、流程、表頭等異常，全部保留
+            
+            # 💡 關鍵：只要是會計、數量、統計、運費、流程、表頭相關，絕對保留！
+            keep_keywords = ["統計", "數量", "不符", "運費", "流程", "表頭", "未匹配"]
+            if any(kw in i_type for kw in keep_keywords):
+                ai_filtered_issues.append(i)
+            # 只有純粹標註「數值」、「尺寸」的才過濾，交給 Python 補正
+            elif "數值" not in i_type and "尺寸" not in i_type:
                 ai_filtered_issues.append(i)
             
-        # 最終會師
-        python_header_issues, _ = python_header_check(st.session_state.photo_gallery)
+        # 加上 Python 引擎算出來的正確異常
         all_issues = ai_filtered_issues + python_numeric_issues + python_header_issues
         
         st.session_state.analysis_result_cache = {
