@@ -418,30 +418,20 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
 
     ### 🚀 執行程序 (Execution Procedure)
 
-    #### ⚔️ 模組 A：工程規格稽核 (Engineering)
-    **判定公式：PASS = (Step 1 數值合格) AND (Step 2 邏輯合格)**
+   #### ⚔️ 模組 A：工程規格稽核 (Engineering)
+    **1. 數據提取 (AI 任務)**：
+    *   請從表格與知識庫中提取 Roll ID 與實測值，**務必保留文字原始格式** (如: 188 保持為 "188"，198.10 保持為 "198.10")。
+    *   **分類規則**：
+        - 若標題包含「未再生」，分類設為 `未再生車修`。
+        - 若標題包含「再生」、「研磨」、「精加工」且**絕對不含**「未再生」，分類設為 `精加工再生`。
+        - 若標題包含「軸頸」且包含「未再生」，分類設為 `軸頸未再生`。
+        - 若標題包含「銲補」，分類設為 `銲補`。
+        - 若標題包含「組裝」或「真圓度」，分類設為 `組裝`。
 
-    **Step 1: 特規指令與數值檢查**
-    *   **讀取與解析**：讀取 Standard_Spec 並深入解析 Logic_Prompt。
-    *   **檢查指令**：若 `Logic_Prompt` 有內容，優先執行。
-    *   **條件判定 (CRITICAL)：
-        *   若 Logic_Prompt 定義了「大於規格但格式正確即合格」的邏輯（例如：實測 > 規格 且為 #.## 兩位小數則合格），必須以此為準，嚴禁直接判定為超規。
-        *   核對流程：
-        *   先判斷實測值與規格的大小關係。
-        *   再檢查該大小關係對應的「小數位數格式」。
-        *   若符合 Excel 規定的「大小關係 + 格式組合」，即判定為 PASS。
-    *   **標題鎖定**：**嚴禁建議重歸類。** 僅針對當前標題下的數據進行核對。若數據符合該標題對應的 Excel 規範，則判定為合格。禁止以「數值過低應屬再生」等理由判定不合格。
-    *   **比對數值**：若有 `Standard_Spec`，以此為標準。
-
-    **Step 2: 物理與通用邏輯檢查 (CRITICAL STEP)**
-    *   **啟動條件**：
-        *   `IF` Step 1 的 `Logic_Prompt` 是 **空白 (Empty)** -> **必須執行 Step 2**。
-        *   `IF` Step 1 的 `Logic_Prompt` 寫了 "豁免" -> 只有這種情況才可跳過。
-    *   **執行動作**：
-        1.  **物理順序**：針對「同一滾輪編號 (Roll ID)」，檢查跨製程之演進數值。原則：`前段製程(未再生)之數值 應小於或等於 後段製程(再生/銲補)之數值`。
-        2.  **依賴性**：檢查前後製程是否存在。
-        3.  **通用格式**：若通用規則要求兩位小數，實測值須符合。
-
+    **2. 物理流程檢查 (Step 2 - AI 繼續執行)**：
+    *   **物理順序**：針對同一編號，檢查製程演進。原則：`前段(未再生) <= 後段(再生/銲補/研磨)`。
+    *   **流程依賴**：檢查後段製程是否有對應的前段紀錄。若流程中斷，在 `issues` 中回報。
+    
     ### 🚀 執行模組 B：會計數量核對 (三階段獨立參數)
     **請注意：會計檢查分為三個獨立步驟，每個步驟必須參考 Excel 對應的規則欄位。**
     
@@ -507,21 +497,17 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
         - 證據行：{{ "id": "項目名稱 (P.頁碼)", "val": "該項數量", "calc": "計入加總" }}
         - 最後行：{{ "id": "🧮 內文加總", "val": "你的計算結果", "calc": "計算總量" }}
 
-    **請回傳單一 JSON 物件：**
-    {{
-      "job_no": "工令編號",
-      "issues": [
-         {{
-           "page": "頁碼",
-           "item": "項目名稱",
-           "rule_used": "特規名稱/通用規則",
-           "issue_type": "數值超規 / 流程異常 / 統計不符",
-           "spec_logic": "判定標準 (簡述)",
-           "common_reason": "失敗原因 (15字內)",
-           "failures": []  // 依照上方 A 或 B 格式填寫
-         }}
-      ]
-    }}
+    請回傳 JSON。除了 `issues`，必須包含 `dimension_data` 給 Python 判定：
+    "dimension_data": [
+       {{
+         "page": 頁碼,
+         "item_title": "項目完整名稱",
+         "category": "未再生車修 / 精加工再生 / 軸頸未再生 / 銲補 / 組裝",
+         "std_spec": "Excel中的Standard_Spec",
+         "logic_instruction": "Excel中的Logic_Prompt",
+         "data": [ {{"id": "20S71", "val": "188"}} ]
+       }}
+    ]
     """
     
     generation_config = {"response_mime_type": "application/json", "temperature": 0.0, "top_k": 1, "top_p": 0.95}
@@ -618,6 +604,103 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
         final_response["_token_usage"] = {"input": usage_in, "output": usage_out}
         
         return final_response
+        
+        def python_numerical_audit(dimension_data):
+    new_issues = []
+    import re
+
+    for item in dimension_data:
+        rid_list = item.get("data", [])
+        raw_spec = item.get("std_spec", "")
+        logic_instr = item.get("logic_instruction", "")
+        title = item.get("item_title", "")
+        category = item.get("category", "")
+        page_num = item.get("page", "?")
+
+        # 解析標準值 (從文字抓數字)
+        try:
+            target_val = float(re.findall(r"\d+\.?\d*", str(raw_spec))[0])
+        except:
+            target_val = 196.0 
+
+        for entry in rid_list:
+            rid = entry.get("id")
+            val_str = str(entry.get("val", "")).strip()
+            if not val_str: continue
+
+            try:
+                val = float(val_str)
+                # 格式判定：是否為整數格式（不含小數點）
+                is_pure_int = "." not in val_str
+                # 格式判定：是否為兩位小數格式 (#.##)
+                is_two_decimal = "." in val_str and len(val_str.split(".")[-1]) == 2
+                
+                is_passed = True
+                reason = ""
+
+                # --- 1. 未再生車修 (本體) ---
+                if category == "未再生車修":
+                    # 規則：<= 規格 須為整數； > 規格 須為 #.##
+                    if val <= target_val:
+                        if not is_pure_int:
+                            is_passed = False
+                            reason = f"未再生(<=標準): 格式錯誤，應為整數 (實測:{val_str})"
+                    else: # val > target_val
+                        if not is_two_decimal:
+                            is_passed = False
+                            reason = f"未再生(>標準): 格式錯誤，應為兩位小數 (實測:{val_str})"
+
+                # --- 2. 精加工 / 再生 / 研磨 (排除未再生後的情況) ---
+                elif category == "精加工再生":
+                    # 規則：必須為兩位小數 #.##，且要在區間內 (通常 Excel 會給區間)
+                    if not is_two_decimal:
+                        is_passed = False
+                        reason = f"精加工/再生: 格式錯誤，應為兩位小數 (實測:{val_str})"
+                    # 這裡可以視情況增加區間判斷
+
+                # --- 3. 軸頸未再生 ---
+                elif category == "軸頸未再生":
+                    # 規則：必須為整數，且 <= 規格上限
+                    if not is_pure_int:
+                        is_passed = False
+                        reason = f"軸頸未再生: 應為整數格式 (實測:{val_str})"
+                    elif val > target_val:
+                        is_passed = False
+                        reason = f"軸頸未再生: 超出規格上限 {target_val}"
+
+                # --- 4. 銲補 (加肉製程) ---
+                elif category == "銲補":
+                    # 規則：必須為整數，且 >= 規格下限
+                    if not is_pure_int:
+                        is_passed = False
+                        reason = f"銲補: 應為整數格式 (實測:{val_str})"
+                    elif val < target_val:
+                        is_passed = False
+                        reason = f"銲補: 低於規格下限 {target_val}"
+
+                # --- 5. 組裝 / 真圓度 ---
+                elif category == "組裝":
+                    # 規則：絕對值 <= 規格(預設0.1)，兩位小數
+                    if abs(val) > target_val:
+                        is_passed = False
+                        reason = f"組裝/真圓度: 數值超出範圍 (實測:{val_str}, 標準:{target_val})"
+                    elif not is_two_decimal:
+                        is_passed = False
+                        reason = "組裝/真圓度: 格式錯誤，應為兩位小數"
+
+                if not is_passed:
+                    new_issues.append({
+                        "page": page_num,
+                        "item": title,
+                        "issue_type": "數值異常(Python判定)",
+                        "rule_used": f"Excel規則: {raw_spec}",
+                        "common_reason": reason,
+                        "failures": [{"id": rid, "val": val_str, "target": raw_spec, "calc": "Python 硬核複核"}],
+                        "source": "🐍 系統判定"
+                    })
+            except:
+                continue
+    return new_issues
 
     except Exception as e:
         return {"job_no": "Error", "issues": [{"item": "System Error", "common_reason": str(e)}], "_token_usage": {"input": 0, "output": 0}}
@@ -843,6 +926,12 @@ if st.session_state.photo_gallery:
         t0 = time.time()
         # 呼叫合併後的 Agent
         res_main = agent_unified_check(combined_input, full_text_for_search, GEMINI_KEY, main_model_name)
+        
+        # --- ✨ 新增這兩行：啟動 Python 硬核複核 ---
+        dim_data = res_main.get("dimension_data", [])
+        python_numeric_issues = python_numerical_audit(dim_data)
+        # ----------------------------------------
+        
         t1 = time.time()
         time_main = t1 - t0
         
@@ -851,10 +940,9 @@ if st.session_state.photo_gallery:
         
         total_end = time.time()
         
-        # --- 成本計算 (單次呼叫) ---
+        # --- 1. 成本計算 (保持原樣) ---
         usage_main = res_main.get("_token_usage", {"input": 0, "output": 0})
         
-        # 費率判斷
         def get_model_rate(model_name):
             name = model_name.lower()
             if "gpt" in name:
@@ -862,24 +950,34 @@ if st.session_state.photo_gallery:
                 elif "3.5" in name: return 0.50, 1.50
                 else: return 2.50, 10.00
             else:
-                # Gemini 費率
                 if "flash" in name: return 0.075, 0.30
                 else: return 1.25, 5.00 # Pro
 
         rate_in, rate_out = get_model_rate(main_model_name)
-        
         cost_usd = (usage_main["input"] / 1_000_000 * rate_in) + (usage_main["output"] / 1_000_000 * rate_out)
         cost_twd = cost_usd * 32.5
         
-        # --- Python 表頭檢查 ---
+        # --- 2. 啟動 Python 硬核數值稽核 ---
+        # 從 AI 提取的數據中執行 Python 判定
+        dim_data = res_main.get("dimension_data", [])
+        python_numeric_issues = python_numerical_audit(dim_data)
+        
+        # --- 3. Python 表頭檢查 (原有功能) ---
         python_header_issues, python_debug_data = python_header_check(st.session_state.photo_gallery)
         
-        # --- 合併結果 ---
-        ai_issues = res_main.get("issues", [])
-        for i in ai_issues: 
+        # --- 4. 合併所有結果 (關鍵邏輯) ---
+        ai_raw_issues = res_main.get("issues", [])
+        ai_filtered_issues = []
+
+        for i in ai_raw_issues:
             i['source'] = '🤖 總稽核 AI'
+            # 💡 重要：如果 Python 已經接手判定數值了，
+            # 我們就過濾掉 AI 報告中包含「數值」字眼的異常，避免 196mm 誤報再次出現。
+            if "數值" not in i.get("issue_type", ""):
+                ai_filtered_issues.append(i)
             
-        all_issues = ai_issues + python_header_issues
+        # 最終會師：AI 流程/會計異常 + Python 規格異常 + Python 表頭異常
+        all_issues = ai_filtered_issues + python_numeric_issues + python_header_issues
         
         st.session_state.analysis_result_cache = {
             "job_no": res_main.get("job_no", "Unknown"),
