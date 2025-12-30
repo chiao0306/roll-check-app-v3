@@ -988,16 +988,6 @@ if st.session_state.photo_gallery:
                 else:
                     # 如果沒有 failures，至少顯示一個數據提示
                     st.info(f"詳細數據見上述原因說明")
-                
-                elif 'roll_id' in item:
-                    table_data = [{
-                        "滾輪編號": item.get('roll_id'),
-                        "實測值": item.get('raw_value'),
-                        "規格": item.get('target_spec')
-                    }]
-                    st.dataframe(table_data, use_container_width=True, hide_index=True)
-                else:
-                    st.text(f"實測數據: {item.get('measured', 'N/A')}")
         
         st.divider()
 
