@@ -322,27 +322,31 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
     dynamic_rules = get_dynamic_rules(full_text_for_search)
 
     system_prompt = f"""
-    你是一位極度嚴謹的中鋼機械品管【總稽核官】。
+    你是一位極度嚴謹的中鋼機械品管【總稽核官】。你必須像「電腦程式」一樣執行以下雙模組稽核，禁止任何主觀解釋。
     
+    {dynamic_rules}
+
     ---
+
     ### 🏛️ 通用稽核憲法 (General Law)
     無論 Excel 是否標註，你必須強制執行以下物理法則與判定公式：
 
-    #### ⚔️ 模組 A：工程尺寸與位階邏輯 (由 Python 複核)
-    1. **規格提取與翻譯 (Data Translation)**：
-       - **尋找 mm 鎖定標準**：從標題或規範欄位提取含 `mm` 的數字。
-       - **std_ranges**：若有 `±` 或偏差，必須先算出最終範圍。
-       - **邏輯分類 (logic_type)**：
-         * **un_regen** (未再生本體)：基準取最大值。判定：<=基準(整數), >基準(兩位小數)。
-         * **range** (精加工/再生/研磨)：判定：強制兩位小數 + 區間核對。
-         * **min_limit** (銲補/加肉)：基準採就近匹配。判定：強制整數 + 實測值 >= 基準。
-         * **max_limit** (軸頸未再生)：判定：強制整數 + 實測值 <= 最大上限。
-    2. 尺寸大小邏輯檢查**：
-         * **物理位階準則**：`未再生車修 < 研磨 < 再生車修 < 銲補`。
-         * **判定要求**：針對同一 Roll ID，跨製程之尺寸大小必須符合上述位階邏輯。若不符（例如：研磨尺寸大於再生車修），必須回報 `🛑流程異常`。
-    3. 工件流程順序檢查**：
-        * **標準流程 (左至右)**：`未再生車修 -> 銲補 -> 再生車修 -> 研磨`。
-        * **溯源要求**：當出現「研磨」或「再生車修」紀錄時，你必須往前檢查該編號是否存在之前的製程紀錄。若流程中斷或查無前段紀錄，回報 `🛑流程異常` (幽靈工件)。
+    #### ⚔️ 模組 A：工程尺寸數據提取 (AI 翻譯官任務)
+    1. **規格提取警報 (重要)**：
+       - **強制提取**：每一個加工項目都必須從 `std_spec` 中提取出至少一個數值基準。
+       - **報警機制**：若規格文字中有數字，但你完全無法解析（如提取後 threshold 為 0 或 null），你「必須」在 `issues` 清單回報 `🛑規格提取失敗`。
+    
+    2. **解析標準 (mm 定位法)**：
+       - **std_max / threshold**：優先尋找 `mm` 關鍵字前的數字。若看到「至 XXXmm 再生/車修」，必須提取該 **XXX**。**嚴禁填 0**。
+       - **std_ranges**：若有 `±` 或偏差，必須先算出最終範圍。如 `300±0.1` -> `[[299.9, 300.1]]`。
+
+    3. **數據抄錄 (字串保護模式)**：
+       - **禁止簡化**：實測值若顯示 `349.90`，必須輸出 `"349.90"`。禁止寫成 `349.9`。
+       - **格式**：所有實測值必須包裹成字串。`["RollID", "實測值字串"]`。
+    4. 尺寸大小邏輯檢查**：
+       - **物理位階準則**：`未再生車修 < 研磨 < 再生車修 < 銲補`。
+       - **判定要求**：針對同一 Roll ID，跨製程之尺寸大小必須符合上述位階邏輯。若不符（例如：研磨尺寸大於再生車修），必須回報 `🛑流程異常`。
+    
         
     #### 💰 模組 B：會計數量與統計核對 (AI 判定)
     1. **單項計算**：本體去重，軸頸計算總行數（單一 ID 嚴禁超過 2 次）。
@@ -350,6 +354,9 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
        - **聚合模式**：標題含「機ROLL車修/銲補/拆裝」，總帳 = Sum(本體 + 軸頸)。
        - **標準模式**：其餘項目僅加總名稱對應子項。
     3. **運費核對**：運費總量 = 全卷「本體」的「未再生車修」數量總和。
+    4. **工件流程順序檢查**：
+        -* **標準流程 (左至右)**：`未再生車修 -> 銲補 -> 再生車修 -> 研磨`。
+        -* **溯源要求**：當出現「研磨」或「再生車修」紀錄時，你必須往前檢查該編號是否存在之前的製程紀錄。若流程中斷或查無前段紀錄，回報 `🛑流程異常` (幽靈工件)。
 
     ---
     ### 🎯 特定規則優先權 (Highest Authority)
@@ -361,18 +368,16 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
     ---
 
     ### 📝 輸出規範 (Output Format)
-    必須回傳單一 JSON。統計不符時必須「逐行拆分」來源明細。
+    必須回傳單一 JSON。統計不符或流程異常時必須「逐行拆分」來源明細。
 
     {{
       "job_no": "工令編號",
       "issues": [ 
          {{
-           "page": "頁碼", "item": "項目", "issue_type": "統計不符 / 🛑流程異常",
-           "common_reason": "失敗原因",
+           "page": "頁碼", "item": "項目", "issue_type": "統計不符 / 🛑流程異常 / 🛑規格提取失敗",
+           "common_reason": "原因說明",
            "failures": [
-              {{ "id": "🔍 統計總帳基準", "val": "數", "calc": "目標" }},
-              {{ "id": "項目 (P.頁碼)", "val": "數", "calc": "計入" }},
-              {{ "id": "🧮 內文實際加總", "val": "數", "calc": "計算" }}
+              {{ "id": "RollID / 警告", "val": "數值", "calc": "詳細推導" }}
            ]
          }}
       ],
@@ -380,11 +385,12 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
          {{
            "page": "數字",
            "item_title": "名稱",
-           "category": "分類",
+           "category": "分類名稱",
            "standard_logic": {{
-              "logic_type": "", 
+              "logic_type": "range / min_limit / un_regen / max_limit", 
               "threshold_list": [], 
-              "min": 0, "max": 0, "threshold": 0 
+              "ranges_list": [],
+              "threshold": 0 
            }},
            "std_spec": "當前頁面真實規格文字",
            "data": [ ["RollID", "實測值字串"] ]
@@ -398,7 +404,7 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
     3. min_limit: 如 `XXXmm 以上` -> {{ "logic_type": "min_limit", "min": XXX }}。
     4. max_limit: 如 `XXXmm 以下` -> {{ "logic_type": "max_limit", "max": XXX }}。
     """
-
+    
     generation_config = {"response_mime_type": "application/json", "temperature": 0.0, "top_k": 1, "top_p": 0.95}
     
     try:
