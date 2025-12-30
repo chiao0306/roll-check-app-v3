@@ -748,15 +748,21 @@ if st.session_state.photo_gallery:
     trigger_analysis = start_btn or is_auto_start
 
     if trigger_analysis:
-        total_start = time.time()
-        status = st.empty()
-        progress_bar = st.progress(0)
+        # 💡 加入這一行，並把後面的代碼全部往右縮 4 個空格
+        with st.spinner("總稽核官正在努力看單子中..."):
+            total_start = time.time()
+            status = st.empty()
+            progress_bar = st.progress(0)
+            
+            # --- 這裡是你原本剩下的所有 OCR 與 AI 分析代碼 ---
+            # 它們通通都要縮進這個 with 區塊裡面
+            # ...
         
-        extracted_data_list = [None] * len(st.session_state.photo_gallery)
-        full_text_for_search = ""
-        total_imgs = len(st.session_state.photo_gallery)
-        
-        ocr_start = time.time()
+            extracted_data_list = [None] * len(st.session_state.photo_gallery)
+            full_text_for_search = ""
+            total_imgs = len(st.session_state.photo_gallery)
+            
+            ocr_start = time.time()
         
         def process_image_task(index, item):
             index = int(index)
