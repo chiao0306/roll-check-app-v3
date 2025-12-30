@@ -390,6 +390,13 @@ def python_header_check(photo_gallery):
                 
     return issues, extracted_data
 
+    # --- 5. 總稽核 Agent (整合版 - 強邏輯優化) ---
+def agent_unified_check(combined_input, full_text_for_search, api_key, model_name):
+    
+    # 讀取所有規則
+    dynamic_rules = get_dynamic_rules(full_text_for_search)
+
+    # 這裡開始是字串，裡面的 JSON 範例必須用雙括號 {{ }}
     system_prompt = f"""
     你是一位極度嚴謹的中鋼機械品管【總稽核官】。你必須像「電腦程式」一樣執行以下雙模組稽核，禁止任何主觀解釋。
     
@@ -480,7 +487,8 @@ def python_header_check(photo_gallery):
     4. **max_limit (軸頸未再生模式)**：如 `143mm 以下` -> {{ "logic_type": "max_limit", "max": 143.0 }}。
     }}
     """
-    
+
+    # 這裡開始恢復為 Python 程式碼，使用單括號 { }
     generation_config = {"response_mime_type": "application/json", "temperature": 0.0, "top_k": 1, "top_p": 0.95}
     
     try:
@@ -497,9 +505,6 @@ def python_header_check(photo_gallery):
 
         # === 分流 B: OpenAI GPT ===
         else:
-            if not OPENAI_KEY:
-                return {"job_no": "Error", "issues": [{"item": "Error", "common_reason": "缺少 OpenAI Key"}], "_token_usage": {"input":0, "output":0}}
-            
             client = OpenAI(api_key=OPENAI_KEY)
             response = client.chat.completions.create(
                 model=model_name,
@@ -513,75 +518,35 @@ def python_header_check(photo_gallery):
             usage_in = response.usage.prompt_tokens
             usage_out = response.usage.completion_tokens
 
-        # =========================================================
-        # 🛡️ 絕對防禦：JSON 解析與結構重建
-        # =========================================================
-        
-        # 1. 清洗 Markdown
+        # 🛡️ 絕對防禦：清洗 JSON 標籤
         if "```json" in raw_content:
             raw_content = raw_content.replace("```json", "").replace("```", "")
         elif "```" in raw_content:
             raw_content = raw_content.replace("```", "")
             
-        # 2. 嘗試解析
         try:
             parsed_data = json.loads(raw_content)
         except:
             parsed_data = {"job_no": "JSON Error", "issues": []}
 
-        # 3. 建構最終回傳物件
-        final_response = {}
+        final_response = parsed_data if isinstance(parsed_data, dict) else {"job_no": "Unknown", "issues": []}
+        if "issues" not in final_response: final_response["issues"] = []
+        if "job_no" not in final_response: final_response["job_no"] = "Unknown"
 
-        if isinstance(parsed_data, dict):
-            final_response = parsed_data
-        elif isinstance(parsed_data, list):
-            final_response = {"job_no": "Unknown", "issues": parsed_data}
-        else:
-            final_response = {"job_no": "Unknown", "issues": []}
-
-        # 4. 補全必要欄位
-        if "issues" not in final_response:
-            final_response["issues"] = []
-        if "job_no" not in final_response:
-            final_response["job_no"] = "Unknown"
-
-        # 5. 【修改點】垃圾過濾器 (Garbage Collector) & 矛盾清洗
+        # 垃圾過濾與矛盾清洗
         valid_issues = []
         for i in final_response["issues"]:
-            if isinstance(i, dict):
-                item_name = i.get("item", "")
+            if isinstance(i, dict) and i.get("item"):
                 reason = i.get("common_reason", "")
                 i_type = i.get("issue_type", "")
-
-                # 1. 基本防呆：沒有 item 名稱就踢掉
-                if not item_name: 
-                    continue
-                    
-                # 2. 【關鍵修正】矛盾清洗
-                # 如果 AI 說「合格」，但這又不是「未匹配規則」的強制回報 -> 代表這是 AI 多嘴，踢掉！
-                if "合格" in reason and "未匹配" not in i_type:
-                     continue
-                
-                # 3. 如果 AI 說「合格」，且是「未匹配」，但 issue_type 卻寫「數值超規」 -> 強制修正類型
-                if "合格" in reason and "未匹配" in i_type:
-                    i["issue_type"] = "⚠️未匹配規則" # 強制修正為黃色警告
-
+                if "合格" in reason and "未匹配" not in i_type: continue
+                if "合格" in reason and "未匹配" in i_type: i["issue_type"] = "⚠️未匹配規則"
                 valid_issues.append(i)
         
-        # 將清洗後的乾淨清單放回去
         final_response["issues"] = valid_issues
-
-        # 6. 注入 Token 用量
+        # 這裡也是 Python 程式碼，使用單括號 { }
         final_response["_token_usage"] = {"input": usage_in, "output": usage_out}
         
-        return final_response
-
-    except Exception as e:
-        # 這個 except 必須對齊上面的 try
-        return {"job_no": "Error", "issues": [{"item": "System Error", "common_reason": str(e)}], "_token_usage": {"input": 0, "output": 0}}
-
-# --- agent_unified_check 的結尾 ---
-        final_response["_token_usage"] = {"input": usage_in, "output": usage_out}
         return final_response
 
     except Exception as e:
