@@ -105,110 +105,36 @@ def get_dynamic_rules(ocr_text, debug_mode=False):
     try:
         df = pd.read_excel("rules.xlsx")
         df.columns = [c.strip() for c in df.columns]
-        
         ocr_text_clean = str(ocr_text).upper().replace(" ", "").replace("\n", "")
-        
         specific_rules = []
-        general_rules = []
-        match_log = []
 
         for index, row in df.iterrows():
             item_name = str(row.get('Item_Name', '')).strip()
+            # 💡 跳過原本的「(通用)」項目，只抓特規
+            if not item_name or "(通用)" in item_name: continue
             
-            # --- 讀取工程欄位 ---
-            spec = str(row.get('Standard_Spec', ''))
-            if str(spec).lower() == 'nan': spec = ""
-            
-            category = str(row.get('Category', ''))
-            if str(category).lower() == 'nan': category = ""
-            
-            logic = str(row.get('Logic_Prompt', ''))
-            if str(logic).lower() == 'nan': logic = ""
-            
-            # --- 讀取會計三欄位 (新功能) ---
-            # 1. 單項核對
-            u_local = str(row.get('Unit_Rule_Local', ''))
-            if u_local.lower() == 'nan': u_local = ""
-            
-            # 2. 聚合統計
-            u_agg = str(row.get('Unit_Rule_Agg', ''))
-            if u_agg.lower() == 'nan': u_agg = ""
-            
-            # 3. 運費計算
-            u_freight = str(row.get('Unit_Rule_Freight', ''))
-            if u_freight.lower() == 'nan': u_freight = ""
-            
-            keywords = str(row.get('Trigger_Keywords', ''))
-            if str(keywords).lower() == 'nan': keywords = ""
-            
-            is_general_rule = "(通用)" in item_name
-            
-            # --- 情境 A: 通用規則 ---
-            if is_general_rule:
-                if not keywords:
-                    rule_desc = f"- **[全域憲法] {item_name}**\n  - 指令: {logic}"
-                    general_rules.append(rule_desc)
-                    if debug_mode: match_log.append(f"⚖️ [憲法] {item_name} (強制載入)")
+            # 使用模糊匹配判斷是否為當前處理的項目
+            score = fuzz.partial_ratio(item_name.upper().replace(" ", ""), ocr_text_clean)
+            if score >= 85:
+                # 提取特規資訊
+                spec = str(row.get('Standard_Spec', ''))
+                logic = str(row.get('Logic_Prompt', ''))
+                u_local = str(row.get('Unit_Rule_Local', ''))
+                u_agg = str(row.get('Unit_Rule_Agg', ''))
+                u_freight = str(row.get('Unit_Rule_Freight', ''))
                 
-                elif keywords:
-                    cleaned_kws = keywords.replace("，", ",").replace("、", ",").split(",")
-                    cleaned_kws = [k.strip() for k in cleaned_kws if k.strip()]
-                    formatted_keywords = str(cleaned_kws)
-
-                    rule_desc = (
-                        f"- **{item_name}**\n"
-                        f"  - 觸發關鍵字: `{formatted_keywords}`\n"
-                        f"  - 邏輯: {logic}"
-                    )
-                    general_rules.append(rule_desc)
-                    if debug_mode: match_log.append(f"📚 [通用] {item_name} (關鍵字: {formatted_keywords})")
-            
-            # --- 情境 B: 特定專案規則 ---
-            else:
-                if not item_name: continue
-                keyword_clean = item_name.upper().replace(" ", "")
-                
-                score = fuzz.partial_ratio(keyword_clean, ocr_text_clean)
-                threshold = 85
-                
-                if debug_mode:
-                    status_icon = "✅" if score >= threshold else "❌"
-                    match_log.append(f"- {status_icon} **[特規] {item_name}** | 分數: `{score}`")
-                
-                if score >= threshold:
-                    desc = f"- **[特定] {item_name}**"
-                    # 工程資訊
-                    if spec: desc += f"\n  - [工]規格標準: {spec}"
-                    if logic: desc += f"\n  - [工]特殊指令: {logic}"
-                    if category: desc += f"\n  - [工]分類: {category}"
-                    
-                    # 會計資訊 (分開列出，讓 AI 對號入座)
-                    if u_local:   desc += f"\n  - [會]單項核對規則: **{u_local}**"
-                    if u_agg:     desc += f"\n  - [會]聚合統計規則: **{u_agg}**"
-                    if u_freight: desc += f"\n  - [會]運費計算規則: **{u_freight}**"
-                    
-                    specific_rules.append(desc)
+                desc = f"- **[特定項目規則] {item_name}**\n"
+                if spec != 'nan' and spec: desc += f"  - [強制規格]: {spec}\n"
+                if logic != 'nan' and logic: desc += f"  - [例外指令]: {logic}\n"
+                if u_local != 'nan' and u_local: desc += f"  - [會計單項]: {u_local}\n"
+                if u_agg != 'nan' and u_agg: desc += f"  - [會計聚合]: {u_agg}\n"
+                if u_freight != 'nan' and u_freight: desc += f"  - [會計運費]: {u_freight}\n"
+                specific_rules.append(desc)
         
-        final_output = ""
-        
-        if specific_rules:
-            final_output += "### 🎯 第一區：專案特定規則 (最高權限)\n" + "\n".join(specific_rules) + "\n\n"
-            
-        if general_rules:
-            final_output += "### 📚 第二區：通用邏輯資料庫 (基礎邏輯)\n"
-            final_output += "\n".join(general_rules)
-            
-        if not final_output:
-            final_output = "無特定規則。"
-
-        if debug_mode:
-            final_output += "\n\n---\n### 🕵️‍♂️ 規則匹配日誌 (Match Log)\n" + "\n".join(match_log)
-            
-        return final_output
-
+        return "\n".join(specific_rules) if specific_rules else "無特定專案規則，請依照通用憲法執行。"
     except Exception as e:
         return f"讀取規則檔時發生錯誤: {e}"
-
+        
 # --- 4. 核心函數：Azure 神之眼 ---
 def extract_layout_with_azure(file_obj, endpoint, key):
     client = DocumentIntelligenceClient(endpoint=endpoint, credential=AzureKeyCredential(key))
@@ -395,76 +321,81 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
     # 讀取 Excel 規則
     dynamic_rules = get_dynamic_rules(full_text_for_search)
 
-    # 💡 只有在這裡面(f-string)的 JSON 範例才需要雙括號 {{ }}
-    system_prompt = f"""
-    你是一位極度嚴謹的中鋼機械品管【總稽核官】。你必須像「電腦程式」一樣執行稽核，禁止主觀解釋。
+   system_prompt = f"""
+    你是一位極度嚴謹的中鋼機械品管【總稽核官】。
     
-    {dynamic_rules}
+    ---
+    ### 🏛️ 通用稽核憲法 (General Law)
+    無論 Excel 是否標註，你必須強制執行以下物理法則與判定公式：
+
+    #### ⚔️ 模組 A：工程尺寸與位階邏輯 (由 Python 複核)
+    1. **規格提取與翻譯 (Data Translation)**：
+       - **尋找 mm 鎖定標準**：從標題或規範欄位提取含 `mm` 的數字。
+       - **std_ranges**：若有 `±` 或偏差，必須先算出最終範圍。
+       - **邏輯分類 (logic_type)**：
+         * **un_regen** (未再生本體)：基準取最大值。判定：<=基準(整數), >基準(兩位小數)。
+         * **range** (精加工/再生/研磨)：判定：強制兩位小數 + 區間核對。
+         * **min_limit** (銲補/加肉)：基準採就近匹配。判定：強制整數 + 實測值 >= 基準。
+         * **max_limit** (軸頸未再生)：判定：強制整數 + 實測值 <= 最大上限。
+    2. **物理位階演進 (AI 判定)**：
+       - **製程位階**：`未再生(小) < 研磨(中) < 再生(大) < 銲補(最大)`。
+       - 檢查同一 Roll ID 跨項目尺寸，若後段製程尺寸「小於」前段（銲補除外），回報 `🛑流程異常`。
+
+    #### 💰 模組 B：會計數量與統計核對 (AI 判定)
+    1. **單項計算**：本體去重，軸頸計算總行數（單一 ID 嚴禁超過 2 次）。
+    2. **總表加總**：
+       - **聚合模式**：標題含「機ROLL車修/銲補/拆裝」，總帳 = Sum(本體 + 軸頸)。
+       - **標準模式**：其餘項目僅加總名稱對應子項。
+    3. **運費核對**：運費總量 = 全卷「本體」的「未再生車修」數量總和。
 
     ---
-
-    ### 🚀 執行程序 (Execution Procedure)
-
-    #### ⚔️ 模組 A：工程尺寸提取 (AI 翻譯官)
-    你的任務是抄錄數據並將規格翻譯成機器碼。**若遇多重規格，請完整提取。**
+    ### 🎯 特定規則優先權 (Highest Authority)
+    若以下資訊存在，其效力大於上述通用憲法：
+    {dynamic_rules}
     
-    1. **解析標準**：優先尋找 `mm` 關鍵字行。
-       - **std_list (數值清單)**：若規格有多個數字（如：143, 163），必須全部列入。
-       - **std_ranges (區間清單)**：若有多個區間（如：129~135, 140~145）或 ± 符號，請 AI 先算出區間列表。
-    2. **數據抄錄 (data)**：實測值必須包裹成字串。格式：`["RollID", "數值字串"]`。
-    3. **規格翻譯 (standard_logic)**：
-       - **logic_type**: "un_regen" (本體未再生), "range" (精加工/組裝), "min_limit" (銲補), "max_limit" (軸頸未再生)。
-
-    #### 💰 模組 B：會計與流程稽核 (由 AI 核心判定)
-    **重要：請務必優先參考 Excel 中的 `Unit_Rule_Local`、`Unit_Rule_Agg` 與 `Unit_Rule_Freight` 欄位。**
-    1. **單項計算**：參考 `Unit_Rule_Local` 進行換算。本體去重，軸頸總行數計數。
-    2. **總表核對**：
-       - 參考 `Unit_Rule_Agg` 過濾。標題含「機ROLL車修/銲補/拆裝」採聚合模式。
-    3. **運費核對**：參考 `Unit_Rule_Freight` 指令，總量 = 全卷「本體未再生車修」加總。
-    4. **物理流程與尺寸位階檢查 (重要)**：
-       - **幽靈工件**：後段製程（再生/研磨）必須有對應的前段紀錄。
-       - **物理尺寸順序邏輯**：針對「同一滾輪編號 (Roll ID)」，檢查跨製程尺寸演進。
-         * **製程位階**：`未再生(最小) < 研磨(中) < 再生(大) < 銲補(最大)`。
-         * **判定邏輯**：若同一 Roll ID，後段製程之數值「小於」前段，必須回報「流程異常」。
-         * **⚠️ 區分職責**：你「不需」判定數據是否符合 Excel 規格（交給 Python），但你「必須」判定同編號跨製程的數字是否符合上述物理大小順序。
+    *若特定規則中出現 [強制規格]，請以該規格翻譯為 standard_logic，忽略圖片中的文字標題規格。*
 
     ---
 
     ### 📝 輸出規範 (Output Format)
+    必須回傳單一 JSON。統計不符時必須「逐行拆分」來源明細。
+
     {{
       "job_no": "工令編號",
       "issues": [ 
          {{
-           "page": "頁碼", "item": "項目名稱", "issue_type": "統計不符 / 流程異常",
-           "common_reason": "失敗原因 (例如：物理順序倒置，再生尺寸小於研磨)",
+           "page": "頁碼", "item": "項目", "issue_type": "統計不符 / 🛑流程異常",
+           "common_reason": "失敗原因",
            "failures": [
-              {{ "id": "滾輪編號", "val": "當前值:190 < 前段值:195", "calc": "物理順序錯誤" }}
+              {{ "id": "🔍 統計總帳基準", "val": "數", "calc": "目標" }},
+              {{ "id": "項目 (P.頁碼)", "val": "數", "calc": "計入" }},
+              {{ "id": "🧮 內文實際加總", "val": "數", "calc": "計算" }}
            ]
          }}
       ],
       "dimension_data": [
-       {{
-         "page": "數字",
-         "item_title": "名稱",
-         "category": "分類",
-         "standard_logic": {{
-            "logic_type": "", 
-            "threshold_list": [], 
-            "ranges_list": []    
-         }},
-         "std_spec": "原始規格文字",
-         "data": [ ["RollID", "實測值"] ]
-       }}
+         {{
+           "page": "數字",
+           "item_title": "名稱",
+           "category": "分類",
+           "standard_logic": {{
+              "logic_type": "", 
+              "threshold_list": [], 
+              "min": 0, "max": 0, "threshold": 0 
+           }},
+           "std_spec": "當前頁面真實規格文字",
+           "data": [ ["RollID", "實測值字串"] ]
+         }}
       ]
     }}
 
-    #### 💡 AI 翻譯官指令 (如何填寫 standard_logic)：
-    1. range (區間模式)：如 `300±0.1` -> {{ "logic_type": "range", "min": 299.9, "max": 300.1 }}。
-    2. un_regen (未再生本體)：如 `至 196mm 再生` -> {{ "logic_type": "un_regen", "threshold": 196.0 }}。
-    3. min_limit (銲補)：如 `163mm 以上` -> {{ "logic_type": "min_limit", "min": 163.0 }}。
-    4. max_limit (軸頸未再生)：如 `143mm 以下` -> {{ "logic_type": "max_limit", "max": 143.0 }}。
+    #### 💡 AI 翻譯官範例 (禁止抄襲數字)：
+    1. range: 如 `XXX±YYY` -> {{ "logic_type": "range", "min": XXX-YYY, "max": XXX+YYY }}。
+    2. un_regen: 如 `至 XXXmm 再生` -> {{ "logic_type": "un_regen", "threshold": XXX }}。
+    3. min_limit: 如 `XXXmm 以上` -> {{ "logic_type": "min_limit", "min": XXX }}。
+    4. max_limit: 如 `XXXmm 以下` -> {{ "logic_type": "max_limit", "max": XXX }}。
     """
-    # 💡 這裡是 Python 程式碼區塊，必須使用單大括號 { }
+
     generation_config = {"response_mime_type": "application/json", "temperature": 0.0, "top_k": 1, "top_p": 0.95}
     
     try:
@@ -480,10 +411,7 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
             client = OpenAI(api_key=OPENAI_KEY)
             response = client.chat.completions.create(
                 model=model_name,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": combined_input}
-                ],
+                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": combined_input}],
                 temperature=0.0
             )
             raw_content = response.choices[0].message.content
@@ -505,7 +433,6 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
         if "issues" not in final_response: final_response["issues"] = []
         if "job_no" not in final_response: final_response["job_no"] = "Unknown"
 
-        # 垃圾過濾與矛盾清洗
         valid_issues = []
         for i in final_response["issues"]:
             if isinstance(i, dict) and i.get("item"):
@@ -522,7 +449,7 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
 
     except Exception as e:
         return {"job_no": "Error", "issues": [{"item": "System Error", "common_reason": str(e)}], "_token_usage": {"input": 0, "output": 0}}
-
+        
 # --- 重點：Python 引擎獨立於 agent 函式之外 ---
 def python_numerical_audit(dimension_data):
     new_issues = []
