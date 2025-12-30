@@ -70,6 +70,7 @@ with st.sidebar:
     model_options = {
         "Gemini 3 Flash preview": "gemini-3-pro-image-preview",
         "Gemini 2.5 Flash": "models/gemini-2.5-flash",
+        "Gemini 2.5 Flash Lite": "models/gemini-2.5-flash-lite",
         "Gemini 2.5 Pro": "models/gemini-2.5-pro",
         #"GPT-5(無效)": "models/gpt-5",
         #"GPT-5 Mini(無效)": "models/gpt-5-mini",
