@@ -453,18 +453,19 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
 # --- 重點：Python 引擎獨立於 agent 函式之外 ---
 def python_numerical_audit(dimension_data):
     new_issues = []
+    import re
     if not dimension_data: return new_issues
 
     for item in dimension_data:
         raw_data_list = item.get("data", [])
         title = item.get("item_title", "")
+        cat = str(item.get("category", "")).strip()
         page_num = item.get("page", "?")
         raw_spec = str(item.get("std_spec", ""))
         
         logic = item.get("standard_logic", {})
         l_type = logic.get("logic_type")
-        # 💡 優先從提取清單拿，沒有就拿單一門檻值
-        s_list = logic.get("threshold_list", [])
+        s_list = [float(n) for n in logic.get("threshold_list", []) if n is not None]
         s_ranges = logic.get("ranges_list", [])
         s_threshold = logic.get("threshold")
 
@@ -475,48 +476,43 @@ def python_numerical_audit(dimension_data):
 
             try:
                 val = float(val_str)
-                # 💡 精確檢查：必須含小數點且後綴長度為 2 (解決 349.9 的問題)
                 is_two_dec = "." in val_str and len(val_str.split(".")[-1]) == 2
                 is_pure_int = "." not in val_str
                 is_passed, reason, t_used = True, "", "N/A"
 
-                # --- 1. 未再生本體 (核心：多規格取最大值，無數字則跳過) ---
+                # --- 1. 未再生本體 ---
                 if l_type == "un_regen":
-                    target = max(s_list) if s_list else s_threshold
-                    if target is None: continue # 🛡️ 安全鎖：沒標準就不判斷，不准用196
+                    # 💡 修正：不再使用 196.0 作為預設值
+                    target = max(s_list) if s_list else (float(s_threshold) if s_threshold else None)
+                    if target is None: continue 
                     
                     t_used = target
                     if val <= target:
-                        if not is_pure_int: is_passed, reason = False, f"未再生(<=標準{target}): 應為整數格式"
-                    else: # val > target
+                        if not is_pure_int: is_passed, reason = False, f"未再生(<=標準{target}): 應為整數"
+                    else:
                         if not is_two_dec: is_passed, reason = False, f"未再生(>標準{target}): 應填兩位小數(含末尾0)"
 
-                # --- 2. 精加工再生類 (核心：多區間配到任一也合格) ---
+                # --- 2. 區間模式 (精加工) ---
                 elif l_type == "range":
                     if not is_two_dec:
-                        is_passed, reason = False, "精加工格式錯誤: 應填兩位小數(如.90)"
+                        is_passed, reason = False, "精加工格式錯誤: 應為兩位小數"
                     elif s_ranges:
-                        # 💡 多區間判定
                         is_passed = any(r[0] <= val <= r[1] for r in s_ranges if len(r)==2)
                         t_used = str(s_ranges)
-                        if not is_passed: reason = f"尺寸不在任何規範區間內 {t_used}"
-                    elif s_list or s_threshold:
-                        t_used = max(s_list) if s_list else s_threshold
-                        if val > t_used: is_passed, reason = False, f"超過上限 {t_used}"
+                        if not is_passed: reason = f"尺寸不在規範區間內 {t_used}"
 
-                # --- 3. 銲補 (核心：智慧匹配最近的數字) ---
+                # --- 3. 銲補 (智慧匹配) ---
                 elif l_type == "min_limit":
                     if not is_pure_int:
                         is_passed, reason = False, "銲補格式錯誤: 應為純整數"
                     elif s_list:
-                        # 💡 智慧匹配最近基準
                         target = min(s_list, key=lambda x: abs(x - val))
                         t_used = target
                         if val < target: is_passed, reason = False, f"銲補不足: 實測 {val} < 基準 {target}"
 
-                # --- 4. 軸頸未再生 ---
+                # --- 4. 軸頸上限 ---
                 elif l_type == "max_limit":
-                    target = max(s_list) if s_list else s_threshold
+                    target = max(s_list) if s_list else (float(s_threshold) if s_threshold else None)
                     if target is None: continue
                     t_used = target
                     if not is_pure_int: is_passed, reason = False, "格式錯誤: 應為純整數"
