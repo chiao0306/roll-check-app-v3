@@ -321,7 +321,7 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
     # 讀取 Excel 規則
     dynamic_rules = get_dynamic_rules(full_text_for_search)
 
-   system_prompt = f"""
+    system_prompt = f"""
     你是一位極度嚴謹的中鋼機械品管【總稽核官】。
     
     ---
