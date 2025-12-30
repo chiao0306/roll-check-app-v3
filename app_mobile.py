@@ -68,9 +68,8 @@ with st.sidebar:
     
     # 這裡加入最新的 Gemini 模型
     model_options = {
-        "Gemini 3 Flash preview": "gemini-3-pro-image-preview",
+        "Gemini 3 Flash preview": "gemini-3-flash-preview",
         "Gemini 2.5 Flash": "models/gemini-2.5-flash",
-        "Gemini 2.5 Flash Lite": "models/gemini-2.5-flash-lite",
         "Gemini 2.5 Pro": "models/gemini-2.5-pro",
         #"GPT-5(無效)": "models/gpt-5",
         #"GPT-5 Mini(無效)": "models/gpt-5-mini",
