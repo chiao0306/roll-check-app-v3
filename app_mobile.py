@@ -397,80 +397,49 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
 
     # 💡 只有在這裡面(f-string)的 JSON 範例才需要雙括號 {{ }}
     system_prompt = f"""
-    你是一位極度嚴謹的中鋼機械品管【總稽核官】。你必須像「電腦程式」一樣執行以下雙模組稽核，禁止任何主觀解釋。
+    你是一位極度嚴謹的中鋼機械品管【總稽核官】。你必須像「電腦程式」一樣執行稽核，禁止主觀解釋。
     
     {dynamic_rules}
 
     ---
 
-    ### ⚖️ 判決憲法 (Hierarchy of Authority)
-    1. [第一區：專案特定規則] 為最高權限。
-    2. [第二區：通用邏輯] 為全廠物理法則。判定公式：PASS = 符合特規數據 AND 符合通用邏輯。
-    3. [雙軌判定]：工程尺寸由 Python 硬邏輯複核；會計數量與物理流程由 AI 核心判定。
-
-    ---
-
     ### 🚀 執行程序 (Execution Procedure)
 
-    #### ⚔️ 模組 A：工程尺寸數據提取 (供系統複核)
-    請精確抄錄各頁數據。**嚴禁跨頁腦補，只抄錄當前頁面數字。**
-    1. **解析標準 (std_spec)**：優先尋找包含 `mm`、`直徑`、`內徑`、`至...再生` 的文字行。
-       - **std_ranges (預算區間)**：你必須先算出最終範圍。
-         * `300mm ± 0.1` -> `[[299.9, 300.1]]`
-         * `350mm +0, -0.14` -> `[[349.86, 350.0]]`
-    2. **數據抄錄 (data) - 【字串保護模式】**：
-       - **禁止簡化**：若圖片顯示 `349.90`，必須輸出 `"349.90"`。禁止寫成 `349.9`。
-       - 所有實測值必須用雙引號包裹成字串。格式：`["RollID", "數值字串"]`。
-    3. **分類識別 (category)**：[未再生本體, 軸頸未再生, 銲補, 精加工再生]
+    #### ⚔️ 模組 A：工程尺寸提取 (AI 翻譯官)
+    你的任務是抄錄數據並將規格翻譯成機器碼。**若遇多重規格，請完整提取。**
+    
+    1. **解析標準**：優先尋找 `mm` 關鍵字行。
+       - **std_list (數值清單)**：若規格有多個數字（如：143, 163），必須全部列入。
+       - **std_ranges (區間清單)**：若有多個區間（如：129~135, 140~145）或 ± 符號，請 AI 先算出區間列表。
+    2. **數據抄錄 (data)**：實測值必須包裹成字串。格式：`["RollID", "數值字串"]`。
+    3. **規格翻譯 (standard_logic)**：
+       - **logic_type**: "un_regen" (本體未再生), "range" (精加工/組裝), "min_limit" (銲補), "max_limit" (軸頸未再生)。
 
-    #### 💰 模組 B：會計數量與物理流程稽核 (AI 核心判定)
-    **Step 1: 單項數量計算 (Local)**
-    - 本體 (Body): 使用 Count Distinct (去重計數)。
-    - 軸頸/內孔: 使用 Count Total Rows (總行數計數)，且單一編號嚴禁重複超過 2 次。
-    - 單位換算: 參考 Excel [會]單項核對規則 執行 1SET=2PCS 或 4PCS 之換算。
-
-    **Step 2: 總表核對 (Global Summary Check)**
-    - A. 雙軌聚合模式：若標題含「機ROLL車修」、「機ROLL銲補」、「機ROLL拆裝」，總帳 = 全卷 Sum(本體 + 軸頸)。
-    - B. 標準對應模式：若非上述關鍵字，僅加總名稱對應項目。
-    - 過濾規則: 嚴禁計入 Excel 標記為「豁免」的項目。
-
-    **Step 3: 運費計算 (Freight Check)**
-    - 運費項次總量 = 全卷「本體」的「未再生車修」數量總和。
-
-    **Step 4: 物理順序與禁止項**
-    - 檢查幽靈工件：後段製程必須有對應的前段紀錄。
-    - **⚠️ 禁止數值報錯**：嚴禁在此回報尺寸數字大小問題，僅回報數量不符或流程中斷。
+    #### 💰 模組 B：會計與流程稽核 (由 AI 核心判定)
+    **重要：請務必優先參考 Excel 中的 `Unit_Rule_Local`、`Unit_Rule_Agg` 與 `Unit_Rule_Freight` 欄位。**
+    1. **單項計算**：參考 `Unit_Rule_Local` 進行換算。本體去重，軸頸總行數計數。
+    2. **總表核對**：
+       - 參考 `Unit_Rule_Agg` 過濾。標題含「機ROLL車修/銲補/拆裝」採聚合模式。
+    3. **運費核對**：參考 `Unit_Rule_Freight` 指令，總量 = 全卷「本體未再生車修」加總。
+    4. **禁止數值報錯**：嚴禁在 issue 中回報尺寸數字大小問題。
 
     ---
 
     ### 📝 輸出規範 (Output Format)
-    必須回傳單一 JSON。統計不符時必須「逐行拆分」每一頁的來源證據。
-
     {{
       "job_no": "工令編號",
-      "issues": [ 
-         {{
-           "page": "頁碼", "item": "項目", "issue_type": "統計不符 / 流程異常",
-           "common_reason": "失敗原因",
-           "failures": [
-              {{ "id": "🔍 統計總帳基準", "val": "目標數", "calc": "目標" }},
-              {{ "id": "項目全名 (P.頁碼)", "val": "數量", "calc": "計入加總" }},
-              {{ "id": "🧮 內文實際加總", "val": "總計", "calc": "計算總量" }}
-           ]
-         }}
-      ],
+      "issues": [ ... ],
       "dimension_data": [
        {{
          "page": "數字",
          "item_title": "名稱",
          "category": "分類",
          "standard_logic": {{
-            "logic_type": "range / min_limit / un_regen / max_limit", 
-            "min": 0, 
-            "max": 0, 
-            "threshold": 0 
+            "logic_type": "", 
+            "threshold_list": [], // 存放所有單一數字
+            "ranges_list": []    // 存放所有區間，格式 [[min, max], [min, max]]
          }},
-         "std_spec": "含 mm 的原始規格文字",
+         "std_spec": "原始規格文字",
          "data": [ ["RollID", "實測值"] ]
        }}
       ]
@@ -545,66 +514,74 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
 # --- 重點：Python 引擎獨立於 agent 函式之外 ---
 def python_numerical_audit(dimension_data):
     new_issues = []
-    import re
     if not dimension_data: return new_issues
 
     for item in dimension_data:
         raw_data_list = item.get("data", [])
         title = item.get("item_title", "")
-        cat = str(item.get("category", "")).strip()
         page_num = item.get("page", "?")
         raw_spec = str(item.get("std_spec", ""))
         
-        # 讀取 AI 翻譯好的邏輯
         logic = item.get("standard_logic", {})
         l_type = logic.get("logic_type")
+        s_list = logic.get("threshold_list", []) # [143, 163]
+        s_ranges = logic.get("ranges_list", [])  # [[129, 135], [140, 145]]
 
         for entry in raw_data_list:
             if not isinstance(entry, list) or len(entry) < 2: continue
             rid, val_str = str(entry[0]).strip(), str(entry[1]).strip()
-            if not val_str or val_str in ["N/A", "nan", "M10"]: continue
+            if not val_str or val_str in ["N/A", "nan"]: continue
 
             try:
                 val = float(val_str)
-                # 精確字串檢查
                 is_two_dec = "." in val_str and len(val_str.split(".")[-1]) == 2
                 is_pure_int = "." not in val_str
                 is_passed, reason, t_used = True, "", "N/A"
 
-                # 1. 未再生本體 (un_regen)
+                # --- 1. 未再生本體 (核心：多規格取最大值) ---
                 if l_type == "un_regen":
-                    threshold = float(logic.get("threshold", 196.0))
+                    # 💡 多規格取最大值
+                    threshold = max(s_list) if s_list else 196.0
                     t_used = threshold
                     if val <= threshold:
                         if not is_pure_int: is_passed, reason = False, f"未再生(<=標準{threshold}): 應為整數"
                     else:
                         if not is_two_dec: is_passed, reason = False, f"未再生(>標準{threshold}): 應填兩位小數(含末尾0)"
 
-                # 2. 區間模式 (range)
+                # --- 2. 精加工再生類 (核心：多區間配到任一也合格) ---
                 elif l_type == "range":
-                    s_min, s_max = float(logic.get("min", 0)), float(logic.get("max", 9999))
-                    t_used = f"{s_min}~{s_max}"
-                    if not is_two_dec: is_passed, reason = False, "精加工格式錯誤: 應為兩位小數"
-                    elif not (s_min <= val <= s_max): is_passed, reason = False, f"尺寸不在區間 {t_used} 內"
+                    if not is_two_dec:
+                        is_passed, reason = False, "精加工格式錯誤: 應為兩位小數(如.90)"
+                    elif s_ranges:
+                        # 💡 多區間判定：只要落在任何一個區間內就 PASS
+                        is_passed = any(r[0] <= val <= r[1] for r in s_ranges if len(r)==2)
+                        t_used = str(s_ranges)
+                        if not is_passed: reason = f"尺寸不在任何規範區間內 {t_used}"
+                    elif s_list:
+                        t_used = max(s_list)
+                        if val > t_used: is_passed, reason = False, f"超過上限 {t_used}"
 
-                # 3. 銲補/下限 (min_limit)
+                # --- 3. 銲補 (核心：採智慧匹配，選擇靠近的數比對) ---
                 elif l_type == "min_limit":
-                    s_min = float(logic.get("min", 0))
-                    t_used = f">{s_min}"
-                    if not is_pure_int: is_passed, reason = False, "銲補格式錯誤: 應為純整數"
-                    elif val < s_min: is_passed, reason = False, f"銲補不足: 實測 {val} < 下限 {s_min}"
+                    if not is_pure_int:
+                        is_passed, reason = False, "銲補格式錯誤: 應為純整數"
+                    elif s_list:
+                        # 💡 智慧匹配：選擇最靠近實測值的數字作為基準
+                        target = min(s_list, key=lambda x: abs(x - val))
+                        t_used = target
+                        if val < target: is_passed, reason = False, f"銲補不足: 實測 {val} < 基準 {target}"
 
-                # 4. 上限模式 (max_limit)
+                # --- 4. 軸頸未再生 ---
                 elif l_type == "max_limit":
-                    s_max = float(logic.get("max", 999))
-                    t_used = f"<{s_max}"
-                    if not is_pure_int: is_passed, reason = False, "上限判定格式錯誤: 應為純整數"
-                    elif val > s_max: is_passed, reason = False, f"超過上限 {s_max}"
+                    target = max(s_list) if s_list else 0
+                    t_used = target
+                    if not is_pure_int: is_passed, reason = False, "格式錯誤: 應為純整數"
+                    elif target > 0 and val > target: is_passed, reason = False, f"超過上限 {target}"
 
                 if not is_passed:
                     new_issues.append({
                         "page": page_num, "item": title, "issue_type": "數值異常(系統判定)",
-                        "rule_used": f"AI編譯規格: {l_type}", "common_reason": reason,
+                        "rule_used": f"Excel: {raw_spec}", "common_reason": reason,
                         "failures": [{"id": rid, "val": val_str, "target": f"基準:{t_used}", "calc": "🐍 Python 判定"}],
                         "source": "🐍 系統判定"
                     })
