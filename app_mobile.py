@@ -876,13 +876,9 @@ if st.session_state.photo_gallery:
         
         # --- 單一代理執行 ---
         t0 = time.time()
-        # 呼叫合併後的 Agent
         res_main = agent_unified_check(combined_input, full_text_for_search, GEMINI_KEY, main_model_name)
         
-        # --- ✨ 新增這兩行：啟動 Python 硬核複核 ---
-        dim_data = res_main.get("dimension_data", [])
-        python_numeric_issues = python_numerical_audit(dim_data)
-        # ----------------------------------------
+        # 💡 [修正] 移除原本這裡的重複 python_numeric_issues 呼叫
         
         t1 = time.time()
         time_main = t1 - t0
@@ -909,12 +905,11 @@ if st.session_state.photo_gallery:
         cost_usd = (usage_main["input"] / 1_000_000 * rate_in) + (usage_main["output"] / 1_000_000 * rate_out)
         cost_twd = cost_usd * 32.5
         
-        # --- 2. 啟動 Python 硬核數值稽核 ---
-        # 從 AI 提取的數據中執行 Python 判定
+        # --- 2. 啟動 Python 硬核數值稽核 (改在這裡執行一次即可) ---
         dim_data = res_main.get("dimension_data", [])
         python_numeric_issues = python_numerical_audit(dim_data)
         
-        # --- 3. Python 表頭檢查 (原有功能) ---
+        # --- 3. Python 表頭檢查 ---
         python_header_issues, python_debug_data = python_header_check(st.session_state.photo_gallery)
         
         # --- 4. 合併結果 ---
@@ -926,13 +921,13 @@ if st.session_state.photo_gallery:
             i_type = i.get("issue_type", "")
             reason = i.get("common_reason", "")
             
-            # 關鍵：禁止 AI 評論任何關於「數值、尺寸、格式、大小關係」的問題
+            # 💡 過濾 AI 評論數值大小的 issue
             forbidden = ["數值", "尺寸", "格式", "大於", "小於", "超規", "不足", "<", ">"]
             if any(word in reason or word in i_type for word in forbidden):
                 if "統計" in i_type or "數量" in i_type:
-                    ai_filtered_issues.append(i) # 統計相關的數字要留
+                    ai_filtered_issues.append(i) # 保留會計
                 else:
-                    continue # 純尺寸對比 -> 丟棄，聽 Python 的
+                    continue # 丟棄 AI 數值判定
             else:
                 ai_filtered_issues.append(i)
             
