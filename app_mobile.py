@@ -347,7 +347,7 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
          
        - **LEVEL 2：未再生判定**
          * 標題含「未再生」時，進行二選一：
-           a. 含「軸頸」 -> 分類必為 `max_limit`。
+           a. 含「軸頸」 -> 分類必為 `max_limit`。 (💡 提示：即便有驅動/非驅動多個數字，也請全部放入 threshold_list，不准變更為 range)。
            b. 不含「軸頸」(本體) -> 分類必為 `un_regen`。
          * (⚠️ 警告：嚴禁因規格文字含「再生」而將其歸類為 range)。
          
@@ -576,26 +576,34 @@ def python_numerical_audit(dimension_data):
                     elif val > target: # 💡 只有大於才失敗，等於 98 是 PASS
                         is_passed, reason = False, f"超過上限 {target}"
 
-                # 💡 [合併卡片核心邏輯]
+                # 💡 [顯示判定模式的優化版]
                 if not is_passed:
-                    # 建立分類標籤：同一頁、同一個項目標題、同樣的錯誤原因
+                    # 定義模式名稱對照表
+                    mode_names = {
+                        "un_regen": "未再生(本體)",
+                        "range": "精加工(區間)",
+                        "min_limit": "銲補(下限)",
+                        "max_limit": "軸頸(上限)"
+                    }
+                    current_mode = mode_names.get(l_type, "未知模式")
+                    
                     error_key = (page_num, title, reason)
                     if error_key not in grouped_errors:
                         grouped_errors[error_key] = {
                             "page": page_num,
                             "item": title,
-                            "issue_type": "數值異常(系統判定)",
+                            "issue_type": f"數值異常({current_mode})", # 這裡會顯示模式
                             "rule_used": f"Excel: {raw_spec}",
                             "common_reason": reason,
-                            "failures": [], # 初始化空的清單
+                            "failures": [],
                             "source": "🐍 系統判定"
                         }
-                    # 將不同 Roll ID 但相同錯誤的資料加進 failures
+                    
                     grouped_errors[error_key]["failures"].append({
                         "id": rid, 
                         "val": val_str, 
                         "target": f"基準:{t_used}", 
-                        "calc": "🐍 Python 判定"
+                        "calc": f"⚖️ {current_mode} 引擎" # 這裡也會顯示
                     })
             except: continue
     return list(grouped_errors.values()) # 將分類好的字典轉回清單格式
