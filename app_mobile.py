@@ -749,7 +749,6 @@ if st.session_state.photo_gallery:
 
     if trigger_analysis:
         total_start = time.time()
-        with st.spinner('總稽核官正在努力看單子中...'):
         status = st.empty()
         progress_bar = st.progress(0)
         
