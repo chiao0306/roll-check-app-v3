@@ -328,18 +328,17 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
 
     ---
 
-    ### 🏛️ 通用稽核憲法 (General Law)
-    無論 Excel 是否標註，你必須強制執行以下物理法則與判定公式：
-
     #### ⚔️ 模組 A：工程尺寸數據提取 (AI 翻譯官任務)
-    1. **規格提取警報 (重要)**：
-       - **強制提取**：每一個加工項目都必須從 `std_spec` 中提取出至少一個數值基準。
-       - **報警機制**：若規格文字中有數字，但你完全無法解析（如提取後 threshold 為 0 或 null），你「必須」在 `issues` 清單回報 `🛑規格提取失敗`。
-    
-    2. **解析標準 (mm 定位法)**：
-       - **std_max / threshold**：優先尋找 `mm` 關鍵字前的數字。若看到「至 XXXmm 再生/車修」，必須提取該 **XXX**。**嚴禁填 0**。
-       - **std_ranges**：若有 `±` 或偏差，必須先算出最終範圍。如 `300±0.1` -> `[[299.9, 300.1]]`。
-    
+    1. **規格提取警報與完整性 (重要)**：
+       - **多重目標處理**：若規格內包含多個「目標數值」（如：驅動端 157mm / 非驅動端 127mm），請將所有目標數字全部填入 `threshold_list`，並取最大值填入 `threshold`。這 **不是** 提取失敗。
+       - **報警機制**：若規格文字中有數字，但你完全無法解析（提取後 threshold 為 0 或 null），你「必須」在 `issues` 清單回報 `🛑規格提取失敗`。只要有抓到任何一個目標數字，嚴禁報錯。
+
+    2. **目標規格解析 (mm 定位與雜訊過濾)**：
+       - **✅ 必抓 (目標尺寸)**：優先尋找與「至...」、「以上」、「±」、「~」、「直徑」直接關聯的數字。
+       - **❌ 排除 (加工量雜訊)**：嚴禁提取「每次車修...」、「進刀量...」、「加工量...」後面的小數字（如 0.5~5mm）。
+       - **📏 本體未再生底線**：針對「本體」未再生項目，其目標門檻（threshold）**絕對不會小於 120mm**。請自動忽略標題或規格中任何小於 120 的數字（如 #1機、項次2、車修3mm）。
+       - **區間計算**：若有 `±` 或偏差，必須先算出最終範圍。如 `300±0.1` -> `[[299.9, 300.1]]`。
+
     3. **項目分類識別與排除邏輯 (極重要)**：
        - **優先鎖定「未再生」**：只要標題包含「未再生」三字，該項目類別必須設為 `un_regen`。
        - **互斥規則**：即便規格文字中包含「至 XXXmm 再生」等字眼，只要項目標題有「未再生」，**嚴禁**歸類為 `range`（精加工再生）。
@@ -347,11 +346,11 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
 
     4. **數據抄錄 (字串保護模式)**：
        - **禁止簡化**：實測值若顯示 `349.90`，必須輸出 `"349.90"`。禁止寫成 `349.9`。
-       - **格式**：所有實測值必須包裹成字串。`["RollID", "實測值字串"]`。
+       - **格式**：所有實測值必須包裹成雙引號字串。`["RollID", "實測值字串"]`。
     
-    5. 尺寸大小邏輯檢查**：
+    5. **尺寸大小邏輯檢查**：
        - **物理位階準則**：`未再生車修 < 研磨 < 再生車修 < 銲補`。
-       - **判定要求**：針對同一 Roll ID，跨製程之尺寸大小必須符合上述位階邏輯。若不符（例如：研磨尺寸大於再生車修），必須回報 `🛑流程異常`。
+       - **判定要求**：針對同一 Roll ID，跨製程之尺寸大小必須符合上述位階邏輯。若不符（例如：研磨尺寸大於再生車修），回報 `🛑流程異常`。
         
     #### 💰 模組 B：會計數量與統計核對 (AI 判定)
     1. **單項計算**：本體去重，軸頸計算總行數（單一 ID 嚴禁超過 2 次）。
@@ -492,17 +491,25 @@ def python_numerical_audit(dimension_data):
                 is_pure_int = "." not in val_str
                 is_passed, reason, t_used = True, "", "N/A"
 
-                # --- 1. 未再生本體 ---
+                # 在 Python 引擎內處理 un_regen 的地方
                 if l_type == "un_regen":
-                    # 💡 修正：不再使用 196.0 作為預設值
-                    target = max(s_list) if s_list else (float(s_threshold) if s_threshold else None)
-                    if target is None: continue 
+                    # 💡 加強防禦：如果 AI 抓到的數字太小（小於120），在「本體」判定中這不可能是標準
+                    candidates = [float(n) for n in s_list if float(n) >= 120.0]
+                    if s_threshold and s_threshold >= 120.0:
+                        candidates.append(float(s_threshold))
+                        
+                    if candidates:
+                        target = max(candidates) # 這樣 285 一定會贏過機號或加工量
+                    else:
+                        continue # 如果連 120 以上的數字都沒抓到，就不判定，避免誤殺
                     
+                    target = max(candidates) # 抓出最大值 (例如 157)
                     t_used = target
+                    
                     if val <= target:
                         if not is_pure_int: is_passed, reason = False, f"未再生(<=標準{target}): 應為整數"
                     else:
-                        if not is_two_dec: is_passed, reason = False, f"未再生(>標準{target}): 應填兩位小數(含末尾0)"
+                        if not is_two_dec: is_passed, reason = False, f"未再生(>標準{target}): 應填兩位小數"
 
                 # --- 2. 區間模式 (精加工) ---
                 elif l_type == "range":
