@@ -363,39 +363,45 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
        - **物理位階準則**：`未再生車修 < 研磨 < 再生車修 < 銲補`。
        - **判定要求**：針對同一 Roll ID，跨製程之尺寸大小必須符合上述位階邏輯。若不符（例如：研磨尺寸大於再生車修），回報 `🛑流程異常`。
         
-    #### 💰 模組 B：會計數量與統計核對 (AI 判定)
-    
-    1. **單項計算**：本體去重，軸頸計算總行數（單一 ID 嚴禁超過 2 次）。
-    
-    2. **總表加總**：
-       - **聚合模式**：標題含「機ROLL車修/銲補/拆裝」，總帳 = Sum(本體 + 軸頸)。
+    #### 💰 模組 B：會計數量與物理流程稽核 (AI 核心判定)
+    當發生以下異常時，必須在 `failures` 中「逐行」列出證據：
+
+    1. **單項計算核對 (Local Check)**：
+       - **規則**：本體去重計數；軸頸/內孔計總行數(單一 ID 限 2 次)。
+       - **失敗回報格式**：
+         * {{"id": "項目名稱(括號PC數)", "val": "目標值", "calc": "目標"}}
+         * {{"id": "內文實際計數", "val": "你的計數", "calc": "實際"}}
+
+    2. **總表加總核對 (Global Check)**：
+       - **聚合模式**：若標題含「機ROLL車修/銲補/拆裝」，總帳 = Sum(本體 + 軸頸)。
        - **標準模式**：其餘項目僅加總名稱對應子項。
-    
-    3. **運費核對**：運費總量 = 全卷「本體」的「未再生車修」數量總和。
-    
-    4. **工件流程順序檢查**：
-        -* **標準流程 (左至右)**：`未再生車修 -> 銲補 -> 再生車修 -> 研磨`。
-        -* **溯源要求**：當出現「研磨」或「再生車修」紀錄時，你必須往前檢查該編號是否存在之前的製程紀錄。若流程中斷或查無前段紀錄，回報 `🛑流程異常` (幽靈工件)。
+       - **失敗回報格式**：
+         * {{"id": "🔍 統計總帳基準", "val": "左上角目標數", "calc": "目標"}}
+         * {{"id": "項目名稱 (P.頁碼)", "val": "數量", "calc": "計入加總"}}
+         * {{"id": "🧮 內文實際總計", "val": "計算結果", "calc": "計算"}}
+
+    3. **運費核對 (Freight Check)**：
+       - **規則**：運費總量 = 全卷內文中所有「本體」之「未再生車修」數量的總和。
+       - **失敗回報格式**：
+         * {{"id": "🚚 運費統計基準", "val": "目標數", "calc": "目標"}}
+         * {{"id": "本體未再生 (P.頁碼)", "val": "數量", "calc": "計入運費"}}
+         * {{"id": "🧮 運費實際總計", "val": "加總結果", "calc": "計算"}}
+
+    4. **工件流程與尺寸位階檢查**：
+       - **位階**：`未再生 < 研磨 < 再生 < 銲補`。若後段尺寸小於前段（銲補除外），報 `🛑流程異常`。
+       - **溯源**：出現「研磨/再生」必須往前檢查是否有前段紀錄。若無，報 `🛑流程異常`。
 
     ---
-    ### 🎯 特定規則優先權 (Highest Authority)
-    若以下資訊存在，其效力大於上述通用憲法：
-    {dynamic_rules}
-
-    ---
-
     ### 📝 輸出規範 (Output Format)
-    必須回傳單一 JSON。統計不符或流程異常時必須「逐行拆分」來源明細。
+    必須回傳單一 JSON 物件。
 
     {{
       "job_no": "工令編號",
       "issues": [ 
          {{
            "page": "頁碼", "item": "項目", "issue_type": "統計不符 / 🛑流程異常 / 🛑規格提取失敗",
-           "common_reason": "原因說明",
-           "failures": [
-              {{ "id": "RollID / 警告", "val": "數值", "calc": "詳細推導" }}
-           ]
+           "common_reason": "失敗原因",
+           "failures": [] // ⚠️ 必須嚴格遵守上述會計師對帳模式的分行格式
          }}
       ],
       "dimension_data": [
@@ -949,52 +955,39 @@ if st.session_state.photo_gallery:
                 c1, c2 = st.columns([3, 1])
                 
                 source_label = item.get('source', '')
-                rule_source = item.get('rule_used', '系統預設邏輯')
                 issue_type = item.get('issue_type', '異常')
-                common_reason = item.get('common_reason', '')
                 
                 c1.markdown(f"**P.{item.get('page', '?')} | {item.get('item')}**  `{source_label}`")
                 
-                if "Excel" in rule_source:
-                    c1.caption(f"📜 判斷依據: :blue-background[{rule_source}]")
-                elif "無對應" in rule_source or "盲測" in rule_source:
-                    c1.caption(f"⚠️ 判斷依據: :grey-background[❓ 無對應規則 (盲測)]")
-                else:
-                    c1.caption(f"🤖 判斷依據: {rule_source}")
-                
-                if "未匹配" in issue_type:
-                    if "合格" in common_reason:
-                        c2.warning(f"⚠️ 未匹配") 
-                    else:
-                        c2.error(f"🛑 未匹配超規") 
-                elif "流程" in issue_type or "尺寸" in issue_type or "統計" in issue_type:
+                # 顏色控制：會計統計類用紅色，規格類用黃色
+                if "統計" in issue_type or "數量" in issue_type or "流程" in issue_type:
                     c2.error(f"🛑 {issue_type}")
                 else:
                     c2.warning(f"⚠️ {issue_type}")
                 
-                st.caption(f"原因: {common_reason}")
+                st.caption(f"原因: {item.get('common_reason', '')}")
                 
-                spec = item.get('spec_logic') or item.get('target_spec')
-                if spec: st.caption(f"標準: {spec}")
-                
-                if item.get('verification_logic'): st.caption(f"驗證: {item.get('verification_logic')}")
-                
+                # --- 渲染表格 (會計對帳單) ---
                 failures = item.get('failures', [])
                 if failures:
                     table_data = []
                     for f in failures:
                         if isinstance(f, dict):
-                            # 將 id 改為「項目/編號」，這樣會計來源會顯示在第一欄
+                            # 我們統一使用這四個欄位標題，會計與工程共用
                             row = {
-                                "項目/編號": f.get('id', '未知'), 
+                                "項目/滾輪編號": f.get('id', '未知'), 
                                 "實測/計數": f.get('val', 'N/A'),
-                                "規格/備註": f.get('target', ''),
-                                "判定算式": f.get('calc', '')
+                                "標準/備註": f.get('target', ''), # 工程用
+                                "判定算式/狀態": f.get('calc', '') # 會計用
                             }
+                            # 如果是會計模式，把 target 留空，資訊主要在 id 和 val
                             table_data.append(row)
                     
                     if table_data:
                         st.dataframe(table_data, use_container_width=True, hide_index=True)
+                else:
+                    # 如果沒有 failures，至少顯示一個數據提示
+                    st.info(f"詳細數據見上述原因說明")
                 
                 elif 'roll_id' in item:
                     table_data = [{
