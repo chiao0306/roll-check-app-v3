@@ -434,7 +434,7 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
     ---
 
     ### 📝 輸出規範 (Output Format)
-    必須回傳單一 JSON。為了提速，數據抄錄請採用「壓縮列表」：
+    必須回傳單一 JSON。異常統計必須「逐行拆分」來源項目與頁碼。
 
     {{
       "job_no": "工令編號",
@@ -452,15 +452,17 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
          }}
       ],
       "dimension_data": [
-       {{
-         "page": 頁碼,
-         "item_title": "項目名",
-         "category": "分類",
-         "std_max": 數字,
-         "std_ranges": [[min, max]],
-         "data": [ ["A1", "188"], ["A2", "190.05"] ]  // 👈 改成 [ID, 數值] 的簡易列表
-       }}
-    ]
+         {{
+           "page": "數字",
+           "item_title": "項目全名",
+           "category": "分類名稱",
+           "std_max": "門檻值", 
+           "std_list": [],
+           "std_ranges": [],
+           "std_spec": "抄錄含 mm 的原始規格文字",
+           "data": [ {{ "id": "滾輪編號", "val": "實測值(字串)" }} ]
+         }}
+      ]
     }}
     """
     
@@ -576,31 +578,33 @@ def python_numerical_audit(dimension_data):
     if not dimension_data: return new_issues
 
     for item in dimension_data:
-        # --- 注意：現在數據是 [ [ID, Val], [ID, Val] ] ---
-        raw_data_list = item.get("data", []) 
+        rid_list = item.get("data", [])
         title = item.get("item_title", "")
         cat = item.get("category", "")
         page_num = item.get("page", "?")
         raw_spec = str(item.get("std_spec", ""))
         
-        all_raw_nums = [float(n) for n in re.findall(r"\d+\.?\d*", raw_spec)]
-        noise = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 300.0, 350.0]
-        clean_std = [n for n in all_raw_nums if n not in noise and n > 5]
+        # --- 🛡️ 數據清洗與 mm 定位邏輯 ---
+        # 尋找所有靠近 mm 的數字
+        all_nums = [float(n) for n in re.findall(r"\d+\.?\d*", raw_spec)]
+        # 排除 1~10 的小數字(機號/項次)，排除常用的型號雜訊 (350, 300)
+        clean_std = [n for n in all_nums if n > 10 and n not in [350.0, 300.0, 200.0]]
+        
+        # 獲取 AI 解析的區間
         s_ranges = item.get("std_ranges", [])
 
-        for entry in raw_data_list:
-            # 💡 這裡配合精簡格式修改：entry[0] 是 ID, entry[1] 是數值
-            if not isinstance(entry, list) or len(entry) < 2: continue
-            rid = entry[0]
-            val_str = str(entry[1]).strip()
-            
+        for entry in rid_list:
+            rid = entry.get("id")
+            val_str = str(entry.get("val", "")).strip()
             if not val_str or val_str in ["N/A", "nan", ""]: continue
 
             try:
                 val = float(val_str)
                 is_pure_int = "." not in val_str
                 is_two_dec = "." in val_str and len(val_str.split(".")[-1]) == 2
-                is_passed, reason, t_used = True, "", "N/A"
+                is_passed = True
+                reason = ""
+                t_used = "N/A"
 
                 # --- 1. 未再生本體 (最大 mm 門檻值邏輯) ---
                 if cat == "未再生本體":
@@ -642,7 +646,7 @@ def python_numerical_audit(dimension_data):
                     new_issues.append({
                         "page": page_num, "item": title, "issue_type": "數值異常(系統判定)",
                         "rule_used": f"Excel: {raw_spec}", "common_reason": reason,
-                        "failures": [{"id": rid, "val": val_str, "target": "符合規範", "calc": "🐍 系統判定"}],
+                        "failures": [{"id": rid, "val": val_str, "target": "符合規範", "calc": "🐍 Python 判定"}],
                         "source": "🐍 系統判定"
                     })
             except: continue
