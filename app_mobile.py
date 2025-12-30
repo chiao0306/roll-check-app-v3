@@ -477,10 +477,32 @@ def python_numerical_audit(dimension_data):
         page_num = item.get("page", "?")
         raw_spec = str(item.get("std_spec", ""))
         
+        # --- 🛡️ 數據清洗與「模式優先」預解析 ---
+        trusted_stds = [] 
+        # 取得 AI 解析的區間 (若有)
         logic = item.get("standard_logic", {})
+        s_ranges = logic.get("ranges_list", []) if logic.get("ranges_list") else item.get("std_ranges", [])
+        
+        # 1. 抓取緊貼 "mm" 的數字 (權威性最高)
+        mm_nums = [float(n) for n in re.findall(r"(\d+\.?\d*)\s*mm", raw_spec)]
+        trusted_stds.extend(mm_nums)
+
+        # 2. 解析 ± 或偏差結構 (防止 300±0.2 的 300 被濾掉)
+        pm_match = re.findall(r"(\d+\.?\d*)\s*[±]\s*(\d+\.?\d*)", raw_spec)
+        for base, offset in pm_match:
+            b, o = float(base), float(offset)
+            s_ranges.append([b - o, b + o])
+            trusted_stds.extend([b, b-o, b+o])
+
+        # 3. 執行雜訊過濾 (排除機號、型號，除非在信任名單中)
+        all_nums = [float(n) for n in re.findall(r"\d+\.?\d*", raw_spec)]
+        noise = [350.0, 300.0, 200.0, 145.0, 130.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        # 💡 過濾條件：大於 5 且 (在信任名單內 或 不在黑名單內)
+        clean_std = [n for n in all_nums if (n in trusted_stds) or (n not in noise and n > 5)]
+
+        # 獲取 AI 傳來的邏輯參數
         l_type = logic.get("logic_type")
-        s_list = [float(n) for n in logic.get("threshold_list", []) if n is not None]
-        s_ranges = logic.get("ranges_list", [])
+        s_list = logic.get("threshold_list", [])
         s_threshold = logic.get("threshold")
 
         for entry in raw_data_list:
@@ -494,51 +516,53 @@ def python_numerical_audit(dimension_data):
                 is_pure_int = "." not in val_str
                 is_passed, reason, t_used = True, "", "N/A"
 
-                # 在 Python 引擎內處理 un_regen 的地方
-                if l_type == "un_regen":
-                    # 💡 加強防禦：如果 AI 抓到的數字太小（小於120），在「本體」判定中這不可能是標準
-                    candidates = [float(n) for n in s_list if float(n) >= 120.0]
-                    if s_threshold and s_threshold >= 120.0:
+                # --- 1. 未再生本體 (核心邏輯整合) ---
+                if l_type == "un_regen" or ("未再生" in cat and "軸頸" not in cat):
+                    # 💡 結合你的 120mm 護欄邏輯
+                    candidates = [float(n) for n in (clean_std + s_list) if float(n) >= 120.0]
+                    if s_threshold and float(s_threshold) >= 120.0:
                         candidates.append(float(s_threshold))
-                        
-                    if candidates:
-                        target = max(candidates) # 這樣 285 一定會贏過機號或加工量
-                    else:
-                        continue # 如果連 120 以上的數字都沒抓到，就不判定，避免誤殺
                     
-                    target = max(candidates) # 抓出最大值 (例如 157)
+                    if not candidates: continue # 🛡️ 安全鎖：沒標準就不判，不准亂報 196 或 0
+                    
+                    target = max(candidates)
                     t_used = target
-                    
                     if val <= target:
                         if not is_pure_int: is_passed, reason = False, f"未再生(<=標準{target}): 應為整數"
-                    else:
-                        if not is_two_dec: is_passed, reason = False, f"未再生(>標準{target}): 應填兩位小數"
+                    else: # val > target
+                        if not is_two_dec: is_passed, reason = False, f"未再生(>標準{target}): 應填兩位小數(含末尾0)"
 
-                # --- 2. 區間模式 (精加工) ---
-                elif l_type == "range":
+                # --- 2. 精加工再生類 (區間模式) ---
+                elif l_type == "range" or any(x in cat for x in ["再生", "精加工", "研磨", "車修", "組裝"]):
                     if not is_two_dec:
                         is_passed, reason = False, "精加工格式錯誤: 應為兩位小數"
                     elif s_ranges:
-                        is_passed = any(r[0] <= val <= r[1] for r in s_ranges if len(r)==2)
                         t_used = str(s_ranges)
-                        if not is_passed: reason = f"尺寸不在規範區間內 {t_used}"
+                        is_passed = any(r[0] <= val <= r[1] for r in s_ranges if len(r)==2)
+                        if not is_passed: reason = f"不在區間內 {t_used}"
+                    elif clean_std:
+                        s_min, s_max = min(clean_std), max(clean_std)
+                        t_used = f"{s_min}~{s_max}"
+                        if not (s_min <= val <= s_max): is_passed, reason = False, f"不在範圍內 {t_used}"
 
-                # --- 3. 銲補 (智慧匹配) ---
-                elif l_type == "min_limit":
+                # --- 3. 銲補 (智慧匹配最近基準) ---
+                elif l_type == "min_limit" or "銲補" in cat:
                     if not is_pure_int:
                         is_passed, reason = False, "銲補格式錯誤: 應為純整數"
-                    elif s_list:
-                        target = min(s_list, key=lambda x: abs(x - val))
-                        t_used = target
-                        if val < target: is_passed, reason = False, f"銲補不足: 實測 {val} < 基準 {target}"
+                    elif clean_std:
+                        t_used = min(clean_std, key=lambda x: abs(x - val))
+                        if val < t_used: is_passed, reason = False, f"銲補不足: 實測 {val} < 基準 {t_used}"
 
-                # --- 4. 軸頸上限 ---
-                elif l_type == "max_limit":
-                    target = max(s_list) if s_list else (float(s_threshold) if s_threshold else None)
-                    if target is None: continue
+                # --- 4. 軸頸未再生 (上限判定，等於 OK) ---
+                elif l_type == "max_limit" or ("軸頸" in cat and "未再生" in cat):
+                    candidates = [float(n) for n in (clean_std + s_list)]
+                    target = max(candidates) if candidates else (float(s_threshold) if s_threshold else 0)
+                    if target == 0: continue
                     t_used = target
-                    if not is_pure_int: is_passed, reason = False, "格式錯誤: 應為純整數"
-                    elif val > target: is_passed, reason = False, f"超過上限 {target}"
+                    if not is_pure_int:
+                        is_passed, reason = False, "格式錯誤: 應為純整數"
+                    elif val > target: # 💡 只有大於才失敗，等於 98 是 PASS
+                        is_passed, reason = False, f"超過上限 {target}"
 
                 if not is_passed:
                     new_issues.append({
