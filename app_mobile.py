@@ -480,7 +480,7 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
 def python_numerical_audit(dimension_data):
     grouped_errors = {} # 改用字典來進行分類收集
     import re
-    if not dimension_data: return new_issues
+    if not dimension_data: return [] # 修正：若無資料回傳空清單
 
     for item in dimension_data:
         raw_data_list = item.get("data", [])
@@ -489,27 +489,25 @@ def python_numerical_audit(dimension_data):
         page_num = item.get("page", "?")
         raw_spec = str(item.get("std_spec", ""))
         
-        # --- 🛡️ 數據清洗與「模式優先」預解析 ---
+        # --- 🛡️ 數據清洗與「模式優先」預解析 (保留您的完整邏輯) ---
         trusted_stds = [] 
-        # 取得 AI 解析的區間 (若有)
         logic = item.get("standard_logic", {})
         s_ranges = logic.get("ranges_list", []) if logic.get("ranges_list") else item.get("std_ranges", [])
         
-        # 1. 抓取緊貼 "mm" 的數字 (權威性最高)
+        # 1. 抓取緊貼 "mm" 的數字
         mm_nums = [float(n) for n in re.findall(r"(\d+\.?\d*)\s*mm", raw_spec)]
         trusted_stds.extend(mm_nums)
 
-        # 2. 解析 ± 或偏差結構 (防止 300±0.2 的 300 被濾掉)
+        # 2. 解析 ± 或偏差結構
         pm_match = re.findall(r"(\d+\.?\d*)\s*[±]\s*(\d+\.?\d*)", raw_spec)
         for base, offset in pm_match:
             b, o = float(base), float(offset)
             s_ranges.append([b - o, b + o])
             trusted_stds.extend([b, b-o, b+o])
 
-        # 3. 執行雜訊過濾 (排除機號、型號，除非在信任名單中)
-        all_nums = [float(n) for n in re.findall(r"\d+\.?\d*", raw_spec)]
+        # 3. 執行雜訊過濾
+        all_nums = [float(n) for n in re.findall(r"(\d+\.?\d*)", raw_spec)]
         noise = [350.0, 300.0, 200.0, 145.0, 130.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
-        # 💡 過濾條件：大於 5 且 (在信任名單內 或 不在黑名單內)
         clean_std = [n for n in all_nums if (n in trusted_stds) or (n not in noise and n > 5)]
 
         # 獲取 AI 傳來的邏輯參數
@@ -526,87 +524,84 @@ def python_numerical_audit(dimension_data):
                 val = float(val_str)
                 is_two_dec = "." in val_str and len(val_str.split(".")[-1]) == 2
                 is_pure_int = "." not in val_str
-                is_passed, reason, t_used = True, "", "N/A"
+                is_passed, reason, t_used, engine_label = True, "", "N/A", "未知"
 
-                # --- 1. 未再生本體 (核心邏輯整合) ---
-                if l_type == "un_regen" or ("未再生" in cat and "軸頸" not in cat):
-                    # 💡 結合你的 120mm 護欄邏輯
-                    candidates = [float(n) for n in (clean_std + s_list) if float(n) >= 120.0]
-                    if s_threshold and float(s_threshold) >= 120.0:
-                        candidates.append(float(s_threshold))
-                    
-                    if not candidates: continue # 🛡️ 安全鎖：沒標準就不判，不准亂報 196 或 0
-                    
-                    target = max(candidates)
-                    t_used = target
-                    if val <= target:
-                        if not is_pure_int: is_passed, reason = False, f"未再生(<=標準{target}): 應為整數"
-                    else: # val > target
-                        if not is_two_dec: is_passed, reason = False, f"未再生(>標準{target}): 應填兩位小數(含末尾0)"
+                # --- 💡 [核心修正]：重新排列判定優先序，解決關鍵字碰撞 ---
 
-                # --- 2. 精加工再生類 (區間模式) ---
-                elif l_type == "range" or any(x in cat for x in ["再生", "精加工", "研磨", "車修", "組裝"]):
-                    if not is_two_dec:
-                        is_passed, reason = False, "精加工格式錯誤: 應為兩位小數"
-                    elif s_ranges:
-                        t_used = str(s_ranges)
-                        is_passed = any(r[0] <= val <= r[1] for r in s_ranges if len(r)==2)
-                        if not is_passed: reason = f"不在區間內 {t_used}"
-                    elif clean_std:
-                        s_min, s_max = min(clean_std), max(clean_std)
-                        t_used = f"{s_min}~{s_max}"
-                        if not (s_min <= val <= s_max): is_passed, reason = False, f"不在範圍內 {t_used}"
-
-                # --- 3. 銲補 (智慧匹配最近基準) ---
-                elif l_type == "min_limit" or "銲補" in cat:
+                # 1. 【銲補模式】優先權最高
+                if l_type == "min_limit" or "銲補" in (cat + title):
+                    engine_label = "銲補(下限)"
                     if not is_pure_int:
                         is_passed, reason = False, "銲補格式錯誤: 應為純整數"
                     elif clean_std:
                         t_used = min(clean_std, key=lambda x: abs(x - val))
                         if val < t_used: is_passed, reason = False, f"銲補不足: 實測 {val} < 基準 {t_used}"
 
-                # --- 4. 軸頸未再生 (上限判定，等於 OK) ---
-                elif l_type == "max_limit" or ("軸頸" in cat and "未再生" in cat):
-                    candidates = [float(n) for n in (clean_std + s_list)]
-                    target = max(candidates) if candidates else (float(s_threshold) if s_threshold else 0)
-                    if target == 0: continue
-                    t_used = target
-                    if not is_pure_int:
-                        is_passed, reason = False, "格式錯誤: 應為純整數"
-                    elif val > target: # 💡 只有大於才失敗，等於 98 是 PASS
-                        is_passed, reason = False, f"超過上限 {target}"
-
-                # 💡 [顯示判定模式的優化版]
-                if not is_passed:
-                    # 定義模式名稱對照表
-                    mode_names = {
-                        "un_regen": "未再生(本體)",
-                        "range": "精加工(區間)",
-                        "min_limit": "銲補(下限)",
-                        "max_limit": "軸頸(上限)"
-                    }
-                    current_mode = mode_names.get(l_type, "未知模式")
+                # 2. 【未再生模式】(包含本體與軸頸) 優先於精加工
+                elif l_type in ["un_regen", "max_limit"] or "未再生" in (cat + title):
+                    # 分支 A: 軸頸未再生 (max_limit)
+                    if "軸頸" in (cat + title):
+                        engine_label = "軸頸(上限)"
+                        candidates = [float(n) for n in (clean_std + s_list)]
+                        target = max(candidates) if candidates else (float(s_threshold) if s_threshold else 0)
+                        t_used = target
+                        if target > 0:
+                            if not is_pure_int: is_passed, reason = False, "格式錯誤: 應為純整數"
+                            elif val > target: is_passed, reason = False, f"超過上限 {target}"
                     
+                    # 分支 B: 本體未再生 (un_regen)
+                    else:
+                        engine_label = "未再生(本體)"
+                        candidates = [float(n) for n in (clean_std + s_list) if float(n) >= 120.0]
+                        if s_threshold and float(s_threshold) >= 120.0: candidates.append(float(s_threshold))
+                        
+                        if candidates:
+                            target = max(candidates)
+                            t_used = target
+                            if val <= target:
+                                if not is_pure_int: is_passed, reason = False, f"未再生(<=標準{target}): 應為整數"
+                            else:
+                                if not is_two_dec: is_passed, reason = False, f"未再生(>標準{target}): 應填兩位小數(含末尾0)"
+                        else:
+                            is_passed = True # 沒抓到120以上標準則不判定
+
+                # 3. 【精加工/再生/車修/組裝模式】最後判定
+                elif l_type == "range" or any(x in (cat + title) for x in ["再生", "精加工", "研磨", "車修", "組裝", "拆裝", "真圓度"]):
+                    engine_label = "精加工(區間)"
+                    if not is_two_dec:
+                        is_passed, reason = False, "精加工格式錯誤: 應填兩位小數(如.90)"
+                    elif s_ranges:
+                        t_used = str(s_ranges)
+                        is_passed = any(r[0] <= val <= r[1] for r in s_ranges if len(r)==2)
+                        if not is_passed: reason = f"尺寸不在區間 {t_used} 內"
+                    elif clean_std:
+                        s_min, s_max = min(clean_std), max(clean_std)
+                        t_used = f"{s_min}~{s_max}"
+                        if not (s_min <= val <= s_max): is_passed, reason = False, f"不在範圍內 {t_used}"
+
+                # 💡 [合併卡片與模式顯示]
+                if not is_passed:
+                    # 使用 engine_label 讓畫面顯示更清楚
                     error_key = (page_num, title, reason)
                     if error_key not in grouped_errors:
                         grouped_errors[error_key] = {
                             "page": page_num,
                             "item": title,
-                            "issue_type": f"數值異常({current_mode})", # 這裡會顯示模式
+                            "issue_type": f"數值異常({engine_label})",
                             "rule_used": f"Excel: {raw_spec}",
                             "common_reason": reason,
                             "failures": [],
                             "source": "🐍 系統判定"
                         }
-                    
                     grouped_errors[error_key]["failures"].append({
                         "id": rid, 
                         "val": val_str, 
                         "target": f"基準:{t_used}", 
-                        "calc": f"⚖️ {current_mode} 引擎" # 這裡也會顯示
+                        "calc": f"⚖️ {engine_label} 引擎"
                     })
             except: continue
-    return list(grouped_errors.values()) # 將分類好的字典轉回清單格式
+            
+    return list(grouped_errors.values())
     
 # --- 6. 手機版 UI 與 核心執行邏輯 ---
 st.title("🏭 交貨單稽核")
