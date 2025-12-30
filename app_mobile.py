@@ -855,7 +855,7 @@ if st.session_state.photo_gallery:
         # --- 3. Python 表頭檢查 ---
         python_header_issues, python_debug_data = python_header_check(st.session_state.photo_gallery)
         
-        # --- 4. 合併結果 ---
+        # --- 4. 合併結果 (修正版：保證流程異常不被刪除) ---
         ai_raw_issues = res_main.get("issues", [])
         ai_filtered_issues = []
 
@@ -864,13 +864,15 @@ if st.session_state.photo_gallery:
             i_type = i.get("issue_type", "")
             reason = i.get("common_reason", "")
             
-            # 💡 過濾 AI 評論數值大小的 issue
-            forbidden = ["數值", "尺寸", "格式", "大於", "小於", "超規", "不足", "<", ">"]
-            if any(word in reason or word in i_type for word in forbidden):
-                if "統計" in i_type or "數量" in i_type:
-                    ai_filtered_issues.append(i) # 保留會計
-                else:
-                    continue # 丟棄 AI 數值判定
+            # 💡 [關鍵修正]：只要是「流程異常」，直接通過，不准過濾！
+            if "流程" in i_type or "統計" in i_type or "數量" in i_type:
+                ai_filtered_issues.append(i)
+                continue # 直接跳到下一個，不跑下面的過濾邏輯
+
+            # 剩下的才是針對「純數值規格」的過濾
+            forbidden = ["數值", "尺寸", "格式", "超規", "不足"]
+            if any(word in i_type for word in forbidden):
+                continue # 這些才丟掉，交給 Python 引擎判定
             else:
                 ai_filtered_issues.append(i)
             
