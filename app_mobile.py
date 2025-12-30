@@ -421,14 +421,27 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
     2. **總表核對**：
        - 參考 `Unit_Rule_Agg` 過濾。標題含「機ROLL車修/銲補/拆裝」採聚合模式。
     3. **運費核對**：參考 `Unit_Rule_Freight` 指令，總量 = 全卷「本體未再生車修」加總。
-    4. **禁止數值報錯**：嚴禁在 issue 中回報尺寸數字大小問題。
+    4. **物理流程與尺寸位階檢查 (重要)**：
+       - **幽靈工件**：後段製程（再生/研磨）必須有對應的前段紀錄。
+       - **物理尺寸順序邏輯**：針對「同一滾輪編號 (Roll ID)」，檢查跨製程尺寸演進。
+         * **製程位階**：`未再生(最小) < 研磨(中) < 再生(大) < 銲補(最大)`。
+         * **判定邏輯**：若同一 Roll ID，後段製程之數值「小於」前段，必須回報「流程異常」。
+         * **⚠️ 區分職責**：你「不需」判定數據是否符合 Excel 規格（交給 Python），但你「必須」判定同編號跨製程的數字是否符合上述物理大小順序。
 
     ---
 
     ### 📝 輸出規範 (Output Format)
     {{
       "job_no": "工令編號",
-      "issues": [ ... ],
+      "issues": [ 
+         {{
+           "page": "頁碼", "item": "項目名稱", "issue_type": "統計不符 / 流程異常",
+           "common_reason": "失敗原因 (例如：物理順序倒置，再生尺寸小於研磨)",
+           "failures": [
+              {{ "id": "滾輪編號", "val": "當前值:190 < 前段值:195", "calc": "物理順序錯誤" }}
+           ]
+         }}
+      ],
       "dimension_data": [
        {{
          "page": "數字",
@@ -436,8 +449,8 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
          "category": "分類",
          "standard_logic": {{
             "logic_type": "", 
-            "threshold_list": [], // 存放所有單一數字
-            "ranges_list": []    // 存放所有區間，格式 [[min, max], [min, max]]
+            "threshold_list": [], 
+            "ranges_list": []    
          }},
          "std_spec": "原始規格文字",
          "data": [ ["RollID", "實測值"] ]
@@ -451,7 +464,6 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
     3. min_limit (銲補)：如 `163mm 以上` -> {{ "logic_type": "min_limit", "min": 163.0 }}。
     4. max_limit (軸頸未再生)：如 `143mm 以下` -> {{ "logic_type": "max_limit", "max": 143.0 }}。
     """
-
     # 💡 這裡是 Python 程式碼區塊，必須使用單大括號 { }
     generation_config = {"response_mime_type": "application/json", "temperature": 0.0, "top_k": 1, "top_p": 0.95}
     
