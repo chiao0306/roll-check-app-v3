@@ -463,59 +463,64 @@ def python_numerical_audit(dimension_data):
         
         logic = item.get("standard_logic", {})
         l_type = logic.get("logic_type")
-        s_list = logic.get("threshold_list", []) # [143, 163]
-        s_ranges = logic.get("ranges_list", [])  # [[129, 135], [140, 145]]
+        # 💡 優先從提取清單拿，沒有就拿單一門檻值
+        s_list = logic.get("threshold_list", [])
+        s_ranges = logic.get("ranges_list", [])
+        s_threshold = logic.get("threshold")
 
         for entry in raw_data_list:
             if not isinstance(entry, list) or len(entry) < 2: continue
             rid, val_str = str(entry[0]).strip(), str(entry[1]).strip()
-            if not val_str or val_str in ["N/A", "nan"]: continue
+            if not val_str or val_str in ["N/A", "nan", "M10"]: continue
 
             try:
                 val = float(val_str)
+                # 💡 精確檢查：必須含小數點且後綴長度為 2 (解決 349.9 的問題)
                 is_two_dec = "." in val_str and len(val_str.split(".")[-1]) == 2
                 is_pure_int = "." not in val_str
                 is_passed, reason, t_used = True, "", "N/A"
 
-                # --- 1. 未再生本體 (核心：多規格取最大值) ---
+                # --- 1. 未再生本體 (核心：多規格取最大值，無數字則跳過) ---
                 if l_type == "un_regen":
-                    # 💡 多規格取最大值
-                    threshold = max(s_list) if s_list else 196.0
-                    t_used = threshold
-                    if val <= threshold:
-                        if not is_pure_int: is_passed, reason = False, f"未再生(<=標準{threshold}): 應為整數"
-                    else:
-                        if not is_two_dec: is_passed, reason = False, f"未再生(>標準{threshold}): 應填兩位小數(含末尾0)"
+                    target = max(s_list) if s_list else s_threshold
+                    if target is None: continue # 🛡️ 安全鎖：沒標準就不判斷，不准用196
+                    
+                    t_used = target
+                    if val <= target:
+                        if not is_pure_int: is_passed, reason = False, f"未再生(<=標準{target}): 應為整數格式"
+                    else: # val > target
+                        if not is_two_dec: is_passed, reason = False, f"未再生(>標準{target}): 應填兩位小數(含末尾0)"
 
                 # --- 2. 精加工再生類 (核心：多區間配到任一也合格) ---
                 elif l_type == "range":
                     if not is_two_dec:
-                        is_passed, reason = False, "精加工格式錯誤: 應為兩位小數(如.90)"
+                        is_passed, reason = False, "精加工格式錯誤: 應填兩位小數(如.90)"
                     elif s_ranges:
-                        # 💡 多區間判定：只要落在任何一個區間內就 PASS
+                        # 💡 多區間判定
                         is_passed = any(r[0] <= val <= r[1] for r in s_ranges if len(r)==2)
                         t_used = str(s_ranges)
                         if not is_passed: reason = f"尺寸不在任何規範區間內 {t_used}"
-                    elif s_list:
-                        t_used = max(s_list)
+                    elif s_list or s_threshold:
+                        t_used = max(s_list) if s_list else s_threshold
                         if val > t_used: is_passed, reason = False, f"超過上限 {t_used}"
 
-                # --- 3. 銲補 (核心：採智慧匹配，選擇靠近的數比對) ---
+                # --- 3. 銲補 (核心：智慧匹配最近的數字) ---
                 elif l_type == "min_limit":
                     if not is_pure_int:
                         is_passed, reason = False, "銲補格式錯誤: 應為純整數"
                     elif s_list:
-                        # 💡 智慧匹配：選擇最靠近實測值的數字作為基準
+                        # 💡 智慧匹配最近基準
                         target = min(s_list, key=lambda x: abs(x - val))
                         t_used = target
                         if val < target: is_passed, reason = False, f"銲補不足: 實測 {val} < 基準 {target}"
 
                 # --- 4. 軸頸未再生 ---
                 elif l_type == "max_limit":
-                    target = max(s_list) if s_list else 0
+                    target = max(s_list) if s_list else s_threshold
+                    if target is None: continue
                     t_used = target
                     if not is_pure_int: is_passed, reason = False, "格式錯誤: 應為純整數"
-                    elif target > 0 and val > target: is_passed, reason = False, f"超過上限 {target}"
+                    elif val > target: is_passed, reason = False, f"超過上限 {target}"
 
                 if not is_passed:
                     new_issues.append({
@@ -782,26 +787,25 @@ if st.session_state.photo_gallery:
         # --- 3. Python 表頭檢查 ---
         python_header_issues, python_debug_data = python_header_check(st.session_state.photo_gallery)
         
-        # --- 4. 合併結果 (修正版：保證流程異常不被刪除) ---
+        # --- 4. 合併結果 (放寬過濾版) ---
         ai_raw_issues = res_main.get("issues", [])
         ai_filtered_issues = []
 
         for i in ai_raw_issues:
             i['source'] = '🤖 總稽核 AI'
             i_type = i.get("issue_type", "")
-            reason = i.get("common_reason", "")
             
-            # 💡 [關鍵修正]：只要是「流程異常」，直接通過，不准過濾！
-            if "流程" in i_type or "統計" in i_type or "數量" in i_type:
+            # 💡 [關鍵放寬]：
+            # 只要是 流程異常、統計不符、數量不符、運費、表頭、未匹配規則，通通保留！
+            keep_list = ["流程", "統計", "數量", "運費", "表頭", "未匹配"]
+            if any(k in i_type for k in keep_list):
                 ai_filtered_issues.append(i)
-                continue # 直接跳到下一個，不跑下面的過濾邏輯
-
-            # 剩下的才是針對「純數值規格」的過濾
-            forbidden = ["數值", "尺寸", "格式", "超規", "不足"]
-            if any(word in i_type for word in forbidden):
-                continue # 這些才丟掉，交給 Python 引擎判定
             else:
-                ai_filtered_issues.append(i)
+                # 只有純粹標註為「數值」、「格式」、「尺寸」的 AI 報錯才過濾
+                # 因為這部分由 Python 判定最準，不需 AI 多嘴
+                forbidden = ["數值", "尺寸", "格式"]
+                if not any(f in i_type for f in forbidden):
+                    ai_filtered_issues.append(i)
             
         all_issues = ai_filtered_issues + python_numeric_issues + python_header_issues
         
