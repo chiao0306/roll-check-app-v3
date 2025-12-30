@@ -390,12 +390,6 @@ def python_header_check(photo_gallery):
                 
     return issues, extracted_data
 
-# --- 5. 總稽核 Agent (整合版 - 強邏輯優化) ---
-def agent_unified_check(combined_input, full_text_for_search, api_key, model_name):
-    
-    # 讀取所有規則
-    dynamic_rules = get_dynamic_rules(full_text_for_search)
-
     system_prompt = f"""
     你是一位極度嚴謹的中鋼機械品管【總稽核官】。你必須像「電腦程式」一樣執行以下雙模組稽核，禁止任何主觀解釋。
     
@@ -435,7 +429,7 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
     - **單位換算**: 參考 Excel `[會]單項核對規則` 執行 1SET=2PCS 或 4PCS 之換算。
 
     **Step 2: 總表核對 (Global Summary Check)**
-    - **A. 雙軌聚合模式**：若標題含「機ROLL車修」、「機ROLL銲補」、「機ROLL拆裝」，總帳 = 全卷 Sum(本體 + 頸部數量)。
+    - **A. 雙軌聚合模式**：若標題含「機ROLL車修」、「機ROLL銲補」、「機ROLL拆裝」，總帳 = 全卷 Sum(本體 + 軸頸)。
     - **B. 標準對應模式**：若非上述關鍵字，僅加總名稱對應項目。
     - **過濾規則**: 嚴禁計入 Excel 標記為「豁免」或「強制歸類為通用」的項目。
 
@@ -480,10 +474,10 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
     ]
 
     #### 💡 AI 翻譯官指令 (如何填寫 standard_logic)：
-    1. **range (區間模式)**：適用於精加工、組裝、± 符號。如 `300±0.1` -> `{{ "logic_type": "range", "min": 299.9, "max": 300.1 }}`。
-    2. **un_regen (未再生本體模式)**：如 `至 196mm 再生` -> `{{ "logic_type": "un_regen", "threshold": 196.0 }}`。
-    3. **min_limit (銲補模式)**：如 `163mm 以上` -> `{{ "logic_type": "min_limit", "min": 163.0 }}`。
-    4. **max_limit (軸頸未再生模式)**：如 `143mm 以下` -> `{{ "logic_type": "max_limit", "max": 143.0 }}`。
+    1. **range (區間模式)**：適用於精加工、組裝、± 符號。如 `300±0.1` -> {{ "logic_type": "range", "min": 299.9, "max": 300.1 }}。
+    2. **un_regen (未再生本體模式)**：如 `至 196mm 再生` -> {{ "logic_type": "un_regen", "threshold": 196.0 }}。
+    3. **min_limit (銲補模式)**：如 `163mm 以上` -> {{ "logic_type": "min_limit", "min": 163.0 }}。
+    4. **max_limit (軸頸未再生模式)**：如 `143mm 以下` -> {{ "logic_type": "max_limit", "max": 143.0 }}。
     }}
     """
     
