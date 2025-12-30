@@ -362,8 +362,6 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
     ### 🎯 特定規則優先權 (Highest Authority)
     若以下資訊存在，其效力大於上述通用憲法：
     {dynamic_rules}
-    
-    *若特定規則中出現 [強制規格]，請以該規格翻譯為 standard_logic，忽略圖片中的文字標題規格。*
 
     ---
 
