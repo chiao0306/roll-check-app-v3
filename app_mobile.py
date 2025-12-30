@@ -578,35 +578,39 @@ def python_numerical_audit(dimension_data):
     if not dimension_data: return new_issues
 
     for item in dimension_data:
-        raw_entries = item.get("data", [])
+        # 1. 取得數據 (現在是壓縮字串格式)
+        raw_data_list = item.get("data", [])
         title = item.get("item_title", "")
         cat = str(item.get("category", "")).strip()
         page_num = item.get("page", "?")
-        raw_spec = str(item.get("std_spec", ""))
-        
-        # 1. 獲取 AI 解析的區間 (解決尺寸測不到的問題)
-        s_ranges = item.get("std_ranges", [])
-        
-        # 2. 獲取單一標準清單
-        s_list = item.get("std_list", [])
-        all_raw_nums = [float(n) for n in re.findall(r"\d+\.?\d*", raw_spec)]
-        clean_std = [n for n in all_raw_nums if n > 10 and n not in [350.0, 300.0, 200.0]]
+        raw_spec = str(item.get("std_spec", "")) # 這裡是含 mm 的文字
 
-        for entry in raw_entries:
+        # --- 🛡️ 核心：mm 字串定位與數字過濾邏輯 ---
+        # A. 優先抓取紧鄰 "mm" 之前的數字 (解決 350mm, 196mm 等核心標準)
+        mm_base_nums = [float(n) for n in re.findall(r"(\d+\.?\d*)\s*mm", raw_spec)]
+        
+        # B. 抓取所有數字 (包括公差偏移量如 +0.039)
+        all_nums = [float(n) for n in re.findall(r"(\d+\.?\d*)", raw_spec)]
+        
+        # C. 數據清洗：排除機號/項次雜訊 (排除 1~10 的數字)
+        clean_std = [n for n in all_nums if n > 10]
+        
+        # 2. 獲取 AI 解析的區間
+        s_ranges = item.get("std_ranges", [])
+
+        for entry in raw_data_list:
             if not isinstance(entry, list) or len(entry) < 2: continue
             rid, val_str = str(entry[0]).strip(), str(entry[1]).strip()
-            
-            if not val_str or val_str in ["N/A", "nan"]: continue
+            if not val_str or val_str in ["N/A", "nan", "M10"]: continue
 
             try:
                 val = float(val_str)
-                # 💡 格式判定：改用字串比對，精準鎖定「兩位小數」
-                is_pure_int = "." not in val_str
-                # 判定是否剛好兩位：例如 "349.90" 切開後後綴長度應為 2
+                # 💡 精確字串比對：解決 349.90 被 AI 縮減為 349.9 的問題
+                # 若 val_str 是 "349.9"，此處會判定為 False (因為 split 後只有一個 9)
                 is_two_dec = "." in val_str and len(val_str.split(".")[-1]) == 2
+                is_pure_int = "." not in val_str
                 
                 is_passed, reason, t_used = True, "", "N/A"
-
 
                 # --- 1. 未再生本體 (最大值基準) ---
                 if cat == "未再生本體":
