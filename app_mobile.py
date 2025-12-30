@@ -392,11 +392,10 @@ def python_header_check(photo_gallery):
 
     # --- 5. 總稽核 Agent (整合版 - 強邏輯優化) ---
 def agent_unified_check(combined_input, full_text_for_search, api_key, model_name):
-    
-    # 讀取所有規則
+    # 讀取 Excel 規則
     dynamic_rules = get_dynamic_rules(full_text_for_search)
 
-    # 這裡開始是字串，裡面的 JSON 範例必須用雙括號 {{ }}
+    # 💡 只有在這裡面(f-string)的 JSON 範例才需要雙括號 {{ }}
     system_prompt = f"""
     你是一位極度嚴謹的中鋼機械品管【總稽核官】。你必須像「電腦程式」一樣執行以下雙模組稽核，禁止任何主觀解釋。
     
@@ -405,9 +404,9 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
     ---
 
     ### ⚖️ 判決憲法 (Hierarchy of Authority)
-    1. **[第一區：專案特定規則]** 為最高權限。
-    2. **[第二區：通用邏輯]** 為全廠物理法則。判定公式：PASS = 符合特規數據 AND 符合通用邏輯。
-    3. **[雙軌判定]**：工程尺寸由 Python 硬邏輯複核；會計數量與物理流程由 AI 核心判定。
+    1. [第一區：專案特定規則] 為最高權限。
+    2. [第二區：通用邏輯] 為全廠物理法則。判定公式：PASS = 符合特規數據 AND 符合通用邏輯。
+    3. [雙軌判定]：工程尺寸由 Python 硬邏輯複核；會計數量與物理流程由 AI 核心判定。
 
     ---
 
@@ -419,38 +418,33 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
        - **std_ranges (預算區間)**：你必須先算出最終範圍。
          * `300mm ± 0.1` -> `[[299.9, 300.1]]`
          * `350mm +0, -0.14` -> `[[349.86, 350.0]]`
-         * `45mm +0, +0.039` -> `[[45.0, 45.039]]`
     2. **數據抄錄 (data) - 【字串保護模式】**：
        - **禁止簡化**：若圖片顯示 `349.90`，必須輸出 `"349.90"`。禁止寫成 `349.9`。
-       - 所有實測值必須用 **雙引號** 包裹成字串。格式：`["RollID", "數值字串"]`。
-    3. **分類識別 (category)**：
-       - 標題含「銲補」 -> `銲補`
-       - 標題含「未再生」且含「軸頸」 -> `軸頸未再生`
-       - 標題含「未再生」且不含「軸頸」 -> `未再生本體`
-       - 其餘（再生、研磨、精加工、組裝、真圓度） -> `精加工再生`
+       - 所有實測值必須用雙引號包裹成字串。格式：`["RollID", "數值字串"]`。
+    3. **分類識別 (category)**：[未再生本體, 軸頸未再生, 銲補, 精加工再生]
 
     #### 💰 模組 B：會計數量與物理流程稽核 (AI 核心判定)
     **Step 1: 單項數量計算 (Local)**
-    - **本體 (Body)**: 使用 `Count Distinct` (去重計算獨立編號)。
-    - **軸頸/內孔**: 使用 `Count Total Rows` (計算總行數)，且單一編號嚴禁重複超過 2 次。
-    - **單位換算**: 參考 Excel `[會]單項核對規則` 執行 1SET=2PCS 或 4PCS 之換算。
+    - 本體 (Body): 使用 Count Distinct (去重計數)。
+    - 軸頸/內孔: 使用 Count Total Rows (總行數計數)，且單一編號嚴禁重複超過 2 次。
+    - 單位換算: 參考 Excel [會]單項核對規則 執行 1SET=2PCS 或 4PCS 之換算。
 
     **Step 2: 總表核對 (Global Summary Check)**
-    - **A. 雙軌聚合模式**：若標題含「機ROLL車修」、「機ROLL銲補」、「機ROLL拆裝」，總帳 = 全卷 Sum(本體 + 軸頸)。
-    - **B. 標準對應模式**：若非上述關鍵字，僅加總名稱對應項目。
-    - **過濾規則**: 嚴禁計入 Excel 標記為「豁免」或「強制歸類為通用」的項目。
+    - A. 雙軌聚合模式：若標題含「機ROLL車修」、「機ROLL銲補」、「機ROLL拆裝」，總帳 = 全卷 Sum(本體 + 軸頸)。
+    - B. 標準對應模式：若非上述關鍵字，僅加總名稱對應項目。
+    - 過濾規則: 嚴禁計入 Excel 標記為「豁免」的項目。
 
     **Step 3: 運費計算 (Freight Check)**
     - 運費項次總量 = 全卷「本體」的「未再生車修」數量總和。
 
     **Step 4: 物理順序與禁止項**
-    - 檢查幽靈工件：後段製程（再生/研磨）必須有對應的前段紀錄。
+    - 檢查幽靈工件：後段製程必須有對應的前段紀錄。
     - **⚠️ 禁止數值報錯**：嚴禁在此回報尺寸數字大小問題，僅回報數量不符或流程中斷。
 
     ---
 
     ### 📝 輸出規範 (Output Format)
-    必須回傳單一 JSON 物件，包含 `issues` (會計與流程) 與 `dimension_data` (數值提取)。
+    必須回傳單一 JSON。統計不符時必須「逐行拆分」每一頁的來源證據。
 
     {{
       "job_no": "工令編號",
@@ -476,34 +470,31 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
             "max": 0, 
             "threshold": 0 
          }},
+         "std_spec": "含 mm 的原始規格文字",
          "data": [ ["RollID", "實測值"] ]
        }}
-    ]
+      ]
+    }}
 
     #### 💡 AI 翻譯官指令 (如何填寫 standard_logic)：
-    1. **range (區間模式)**：適用於精加工、組裝、± 符號。如 `300±0.1` -> {{ "logic_type": "range", "min": 299.9, "max": 300.1 }}。
-    2. **un_regen (未再生本體模式)**：如 `至 196mm 再生` -> {{ "logic_type": "un_regen", "threshold": 196.0 }}。
-    3. **min_limit (銲補模式)**：如 `163mm 以上` -> {{ "logic_type": "min_limit", "min": 163.0 }}。
-    4. **max_limit (軸頸未再生模式)**：如 `143mm 以下` -> {{ "logic_type": "max_limit", "max": 143.0 }}。
-    }}
+    1. range (區間模式)：如 `300±0.1` -> {{ "logic_type": "range", "min": 299.9, "max": 300.1 }}。
+    2. un_regen (未再生本體)：如 `至 196mm 再生` -> {{ "logic_type": "un_regen", "threshold": 196.0 }}。
+    3. min_limit (銲補)：如 `163mm 以上` -> {{ "logic_type": "min_limit", "min": 163.0 }}。
+    4. max_limit (軸頸未再生)：如 `143mm 以下` -> {{ "logic_type": "max_limit", "max": 143.0 }}。
     """
 
-    # 這裡開始恢復為 Python 程式碼，使用單括號 { }
+    # 💡 這裡是 Python 程式碼區塊，必須使用單大括號 { }
     generation_config = {"response_mime_type": "application/json", "temperature": 0.0, "top_k": 1, "top_p": 0.95}
     
     try:
-        # === 分流 A: Google Gemini ===
         if "gemini" in model_name.lower():
             genai.configure(api_key=api_key)
             model = genai.GenerativeModel(model_name)
             response = model.generate_content([system_prompt, combined_input], generation_config=generation_config)
-            
             raw_content = response.text
             usage_meta = response.usage_metadata
             usage_in = usage_meta.prompt_token_count if usage_meta else 0
             usage_out = usage_meta.candidates_token_count if usage_meta else 0
-
-        # === 分流 B: OpenAI GPT ===
         else:
             client = OpenAI(api_key=OPENAI_KEY)
             response = client.chat.completions.create(
@@ -518,7 +509,7 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
             usage_in = response.usage.prompt_tokens
             usage_out = response.usage.completion_tokens
 
-        # 🛡️ 絕對防禦：清洗 JSON 標籤
+        # JSON 清洗
         if "```json" in raw_content:
             raw_content = raw_content.replace("```json", "").replace("```", "")
         elif "```" in raw_content:
@@ -544,7 +535,6 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
                 valid_issues.append(i)
         
         final_response["issues"] = valid_issues
-        # 這裡也是 Python 程式碼，使用單括號 { }
         final_response["_token_usage"] = {"input": usage_in, "output": usage_out}
         
         return final_response
@@ -552,16 +542,20 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
     except Exception as e:
         return {"job_no": "Error", "issues": [{"item": "System Error", "common_reason": str(e)}], "_token_usage": {"input": 0, "output": 0}}
 
+# --- 重點：Python 引擎獨立於 agent 函式之外 ---
 def python_numerical_audit(dimension_data):
     new_issues = []
+    import re
     if not dimension_data: return new_issues
 
     for item in dimension_data:
         raw_data_list = item.get("data", [])
         title = item.get("item_title", "")
+        cat = str(item.get("category", "")).strip()
         page_num = item.get("page", "?")
+        raw_spec = str(item.get("std_spec", ""))
         
-        # 讀取 AI 編譯好的邏輯物件
+        # 讀取 AI 翻譯好的邏輯
         logic = item.get("standard_logic", {})
         l_type = logic.get("logic_type")
 
@@ -572,46 +566,40 @@ def python_numerical_audit(dimension_data):
 
             try:
                 val = float(val_str)
-                # 💡 精確字串檢查：必須含小數點且後綴長度為 2
+                # 精確字串檢查
                 is_two_dec = "." in val_str and len(val_str.split(".")[-1]) == 2
                 is_pure_int = "." not in val_str
                 is_passed, reason, t_used = True, "", "N/A"
 
-                # 1. 執行【未再生本體】邏輯 (un_regen)
+                # 1. 未再生本體 (un_regen)
                 if l_type == "un_regen":
                     threshold = float(logic.get("threshold", 196.0))
                     t_used = threshold
                     if val <= threshold:
-                        if not is_pure_int: is_passed, reason = False, f"未再生(<=標準{threshold}): 應為整數(禁止小數)"
+                        if not is_pure_int: is_passed, reason = False, f"未再生(<=標準{threshold}): 應為整數"
                     else:
-                        if not is_two_dec: is_passed, reason = False, f"未再生(>標準{threshold}): 超規應填兩位小數(含末尾0)"
+                        if not is_two_dec: is_passed, reason = False, f"未再生(>標準{threshold}): 應填兩位小數(含末尾0)"
 
-                # 2. 執行【區間】邏輯 (range - 精加工/再生/組裝)
+                # 2. 區間模式 (range)
                 elif l_type == "range":
                     s_min, s_max = float(logic.get("min", 0)), float(logic.get("max", 9999))
                     t_used = f"{s_min}~{s_max}"
-                    if not is_two_dec:
-                        is_passed, reason = False, "精加工格式錯誤: 應填兩位小數(如.90)"
-                    elif not (s_min <= val <= s_max):
-                        is_passed, reason = False, f"尺寸不在區間 {t_used} 內"
+                    if not is_two_dec: is_passed, reason = False, "精加工格式錯誤: 應為兩位小數"
+                    elif not (s_min <= val <= s_max): is_passed, reason = False, f"尺寸不在區間 {t_used} 內"
 
-                # 3. 執行【銲補/下限】邏輯 (min_limit)
+                # 3. 銲補/下限 (min_limit)
                 elif l_type == "min_limit":
                     s_min = float(logic.get("min", 0))
                     t_used = f">{s_min}"
-                    if not is_pure_int:
-                        is_passed, reason = False, "銲補格式錯誤: 應為純整數"
-                    elif val < s_min:
-                        is_passed, reason = False, f"銲補不足: 實測 {val} < 下限 {s_min}"
+                    if not is_pure_int: is_passed, reason = False, "銲補格式錯誤: 應為純整數"
+                    elif val < s_min: is_passed, reason = False, f"銲補不足: 實測 {val} < 下限 {s_min}"
 
-                # 4. 執行【上限】邏輯 (max_limit - 軸頸未再生)
+                # 4. 上限模式 (max_limit)
                 elif l_type == "max_limit":
                     s_max = float(logic.get("max", 999))
                     t_used = f"<{s_max}"
-                    if not is_pure_int:
-                        is_passed, reason = False, "軸頸未再生格式錯誤: 應為純整數"
-                    elif val > s_max:
-                        is_passed, reason = False, f"超過上限 {s_max}"
+                    if not is_pure_int: is_passed, reason = False, "上限判定格式錯誤: 應為純整數"
+                    elif val > s_max: is_passed, reason = False, f"超過上限 {s_max}"
 
                 if not is_passed:
                     new_issues.append({
