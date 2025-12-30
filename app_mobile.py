@@ -465,13 +465,25 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
          }}
       ],
       "dimension_data": [
-         {{
-           "page": "數字", "item_title": "項目名", "category": "分類",
-           "std_ranges": [], "std_spec": "含 mm 規格文字",
-           "data": [ ["RollID", "實測值字串"] ]
-         }}
-      ]
-    }}
+       {{
+         "page": 數字,
+         "item_title": "名稱",
+         "category": "分類",
+         "standard_logic": {{
+            "logic_type": "range / min_limit / un_regen", 
+            "min": 數字, 
+            "max": 數字, 
+            "threshold": 數字 
+         }},
+         "data": [ ["RollID", "實測值"] ]
+       }}
+    ]
+
+    #### 💡 AI 翻譯官指令 (如何填寫 standard_logic)：
+    1. **range (區間模式)**：適用於精加工、組裝、± 符號。如 `300±0.1` -> `{"logic_type": "range", "min": 299.9, "max": 300.1}`。
+    2. **un_regen (未再生本體模式)**：如 `至 196mm 再生` -> `{"logic_type": "un_regen", "threshold": 196.0}`。
+    3. **min_limit (銲補模式)**：如 `163mm 以上` -> `{"logic_type": "min_limit", "min": 163.0}`。
+    4. **max_limit (軸頸未再生模式)**：如 `143mm 以下` -> `{"logic_type": "max_limit", "max": 143.0}`。
     """
     
     generation_config = {"response_mime_type": "application/json", "temperature": 0.0, "top_k": 1, "top_p": 0.95}
@@ -582,29 +594,17 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
 
 def python_numerical_audit(dimension_data):
     new_issues = []
-    import re
     if not dimension_data: return new_issues
 
     for item in dimension_data:
-        # 1. 取得數據 (現在是壓縮字串格式)
         raw_data_list = item.get("data", [])
         title = item.get("item_title", "")
         cat = str(item.get("category", "")).strip()
         page_num = item.get("page", "?")
-        raw_spec = str(item.get("std_spec", "")) # 這裡是含 mm 的文字
-
-        # --- 🛡️ 核心：mm 字串定位與數字過濾邏輯 ---
-        # A. 優先抓取紧鄰 "mm" 之前的數字 (解決 350mm, 196mm 等核心標準)
-        mm_base_nums = [float(n) for n in re.findall(r"(\d+\.?\d*)\s*mm", raw_spec)]
         
-        # B. 抓取所有數字 (包括公差偏移量如 +0.039)
-        all_nums = [float(n) for n in re.findall(r"(\d+\.?\d*)", raw_spec)]
-        
-        # C. 數據清洗：排除機號/項次雜訊 (排除 1~10 的數字)
-        clean_std = [n for n in all_nums if n > 10]
-        
-        # 2. 獲取 AI 解析的區間
-        s_ranges = item.get("std_ranges", [])
+        # 💡 核心改變：讀取 AI 編譯好的邏輯
+        logic = item.get("standard_logic", {})
+        l_type = logic.get("logic_type")
 
         for entry in raw_data_list:
             if not isinstance(entry, list) or len(entry) < 2: continue
@@ -613,53 +613,50 @@ def python_numerical_audit(dimension_data):
 
             try:
                 val = float(val_str)
-                # 💡 精確字串比對：解決 349.90 被 AI 縮減為 349.9 的問題
-                # 若 val_str 是 "349.9"，此處會判定為 False (因為 split 後只有一個 9)
                 is_two_dec = "." in val_str and len(val_str.split(".")[-1]) == 2
                 is_pure_int = "." not in val_str
-                
                 is_passed, reason, t_used = True, "", "N/A"
 
-               # --- 1. 未再生本體 ---
-                if "未再生" in cat and "軸頸" not in cat:
-                    target = max(mm_base_nums) if mm_base_nums else (max(clean_std) if clean_std else 196.0)
-                    t_used = target  # 💡 確保 t_used 有賦值
-                    if val <= target:
-                        if not is_pure_int: is_passed, reason = False, f"未再生(<=標準{target}): 應為整數"
+                # --- 1. 執行【未再生本體】邏輯 ---
+                if l_type == "un_regen":
+                    threshold = logic.get("threshold", 196.0)
+                    t_used = threshold
+                    if val <= threshold:
+                        if not is_pure_int: is_passed, reason = False, f"未再生(<=標準{threshold}): 應為整數"
                     else:
-                        if not is_two_dec: is_passed, reason = False, f"未再生(>標準{target}): 應填兩位小數(含末尾0)" # 💡 將 target 換成正確名稱
-                            
-                # --- 2. 軸頸未再生 (純整數 + 最大上限) ---
-                elif cat == "軸頸未再生":
-                    t_used = max(clean_std) if clean_std else 0
-                    if not is_pure_int: is_passed, reason = False, "軸頸未再生: 應為純整數"
-                    elif t_used > 0 and val > t_used: is_passed, reason = False, f"超出上限 {t_used}"
+                        if not is_two_dec: is_passed, reason = False, f"未再生(>標準{threshold}): 應填兩位小數(含末尾0)"
 
-                # --- 3. 精加工再生類 (公差區間/± 判定) ---
-                elif cat == "精加工再生":
+                # --- 2. 執行【區間】邏輯 (精加工/再生/組裝) ---
+                elif l_type == "range":
+                    s_min, s_max = logic.get("min", 0), logic.get("max", 9999)
+                    t_used = f"{s_min}~{s_max}"
                     if not is_two_dec:
-                        is_passed, reason = False, "精加工: 格式錯誤，應為兩位小數"
-                    elif s_ranges:
-                        # 檢查是否符合任一個區間
-                        if not any(r[0] <= val <= r[1] for r in s_ranges if len(r)==2):
-                            is_passed, reason = False, f"不在區間內 {s_ranges}"
-                    elif clean_std:
-                        s_min, s_max = min(clean_std), max(clean_std)
-                        if not (s_min <= val <= s_max):
-                            is_passed, reason = False, f"不在範圍內 {s_min}~{s_max}"
+                        is_passed, reason = False, "精加工格式錯誤: 應為兩位小數"
+                    elif not (s_min <= val <= s_max):
+                        is_passed, reason = False, f"尺寸不在區間 {t_used} 內"
 
-                # --- 4. 銲補 (純整數 + 就近匹配下限) ---
-                elif cat == "銲補":
+                # --- 3. 執行【銲補/下限】邏輯 ---
+                elif l_type == "min_limit":
+                    s_min = logic.get("min", 0)
+                    t_used = f">{s_min}"
                     if not is_pure_int:
-                        is_passed, reason = False, "銲補格式錯誤: 應為純整數"
-                    elif clean_std:
-                        t_used = min(clean_std, key=lambda x: abs(x - val))
-                        if val < t_used: is_passed, reason = False, f"銲補不足: 實測 {val} < 基準 {t_used}"
+                        is_passed, reason = False, "銲補格式錯誤: 應為整數"
+                    elif val < s_min:
+                        is_passed, reason = False, f"銲補不足: 實測 {val} < 下限 {s_min}"
+
+                # --- 4. 執行【上限】邏輯 (軸頸未再生) ---
+                elif l_type == "max_limit":
+                    s_max = logic.get("max", 999)
+                    t_used = f"<{s_max}"
+                    if not is_pure_int:
+                        is_passed, reason = False, "軸頸未再生格式錯誤: 應為整數"
+                    elif val > s_max:
+                        is_passed, reason = False, f"超過上限 {s_max}"
 
                 if not is_passed:
                     new_issues.append({
                         "page": page_num, "item": title, "issue_type": "數值異常(系統判定)",
-                        "rule_used": f"Excel: {raw_spec}", "common_reason": reason,
+                        "rule_used": f"AI編譯規格: {l_type}", "common_reason": reason,
                         "failures": [{"id": rid, "val": val_str, "target": f"基準:{t_used}", "calc": "🐍 Python 判定"}],
                         "source": "🐍 系統判定"
                     })
