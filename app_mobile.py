@@ -612,14 +612,15 @@ def python_numerical_audit(dimension_data):
                 
                 is_passed, reason, t_used = True, "", "N/A"
 
-                # --- 1. 未再生本體 (最大值基準) ---
-                if cat == "未再生本體":
-                    t_used = max(clean_std) if clean_std else 196.0
-                    if val <= t_used:
-                        if not is_pure_int: is_passed, reason = False, f"未再生(<=標準{t_used}): 應為整數"
+               # --- 1. 未再生本體 ---
+                if "未再生" in cat and "軸頸" not in cat:
+                    target = max(mm_base_nums) if mm_base_nums else (max(clean_std) if clean_std else 196.0)
+                    t_used = target  # 💡 確保 t_used 有賦值
+                    if val <= target:
+                        if not is_pure_int: is_passed, reason = False, f"未再生(<=標準{target}): 應為整數"
                     else:
-                        if not is_two_dec: is_passed, reason = False, f"未再生(>標準{target}): 應填兩位小數"
-
+                        if not is_two_dec: is_passed, reason = False, f"未再生(>標準{target}): 應填兩位小數(含末尾0)" # 💡 將 target 換成正確名稱
+                            
                 # --- 2. 軸頸未再生 (純整數 + 最大上限) ---
                 elif cat == "軸頸未再生":
                     t_used = max(clean_std) if clean_std else 0
