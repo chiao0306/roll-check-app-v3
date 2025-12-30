@@ -781,8 +781,8 @@ if st.session_state.photo_gallery:
                 elif "3.5" in name: return 0.50, 1.50
                 else: return 2.50, 10.00
             else:
-                if "flash" in name: return 0.075, 0.30
-                else: return 1.25, 5.00 # Pro
+                if "flash" in name: return 0.5, 3.00
+                else: return 1.25, 10.00 # Pro
 
         rate_in, rate_out = get_model_rate(main_model_name)
         cost_usd = (usage_main["input"] / 1_000_000 * rate_in) + (usage_main["output"] / 1_000_000 * rate_out)
