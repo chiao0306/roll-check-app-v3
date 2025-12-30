@@ -406,7 +406,9 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
     ### 🚀 執行程序 (Execution Procedure)
 
     #### ⚔️ 模組 A：工程尺寸提取 (AI 任務：精確抄錄)
-    **【絕對禁令】：嚴禁跨頁腦補數值，只准抄錄當前頁面數字。**
+    **【極重要禁令】：禁止對數值做任何數學簡化。**
+    - **抄錄規則**：若圖片顯示 `349.90`，你必須輸出 `"349.90"`。
+    絕對禁止寫成 `349.9` 或 `349.900`。所有實測值必須用 **雙引號** 包裹成字串。
     
     1. **解析標準 (std_spec)**：
        - 請尋找包含 `mm`、`直徑`、`內徑`、`至...再生` 的文字行。
@@ -576,32 +578,35 @@ def python_numerical_audit(dimension_data):
     if not dimension_data: return new_issues
 
     for item in dimension_data:
-        # 💡 關鍵對齊：讀取 [ID, Val] 格式
-        raw_data_list = item.get("data", [])
+        raw_entries = item.get("data", [])
         title = item.get("item_title", "")
-        cat = item.get("category", "")
+        cat = str(item.get("category", "")).strip()
         page_num = item.get("page", "?")
         raw_spec = str(item.get("std_spec", ""))
         
-        # --- 🛡️ 數據清洗與 mm 定位 ---
-        all_nums = [float(n) for n in re.findall(r"\d+\.?\d*", raw_spec)]
-        # 排除機號(1-6)、常見型號(300, 350)
-        clean_std = [n for n in all_nums if n > 10 and n not in [350.0, 300.0, 200.0]]
-        
-        # 獲取 AI 解析的區間
+        # 1. 獲取 AI 解析的區間 (解決尺寸測不到的問題)
         s_ranges = item.get("std_ranges", [])
+        
+        # 2. 獲取單一標準清單
+        s_list = item.get("std_list", [])
+        all_raw_nums = [float(n) for n in re.findall(r"\d+\.?\d*", raw_spec)]
+        clean_std = [n for n in all_raw_nums if n > 10 and n not in [350.0, 300.0, 200.0]]
 
-        for entry in raw_data_list:
+        for entry in raw_entries:
             if not isinstance(entry, list) or len(entry) < 2: continue
             rid, val_str = str(entry[0]).strip(), str(entry[1]).strip()
             
-            if not val_str or val_str in ["N/A", "nan", "M10"]: continue
+            if not val_str or val_str in ["N/A", "nan"]: continue
 
             try:
                 val = float(val_str)
+                # 💡 格式判定：改用字串比對，精準鎖定「兩位小數」
                 is_pure_int = "." not in val_str
+                # 判定是否剛好兩位：例如 "349.90" 切開後後綴長度應為 2
                 is_two_dec = "." in val_str and len(val_str.split(".")[-1]) == 2
+                
                 is_passed, reason, t_used = True, "", "N/A"
+
 
                 # --- 1. 未再生本體 (最大值基準) ---
                 if cat == "未再生本體":
@@ -642,7 +647,7 @@ def python_numerical_audit(dimension_data):
                     new_issues.append({
                         "page": page_num, "item": title, "issue_type": "數值異常(系統判定)",
                         "rule_used": f"Excel: {raw_spec}", "common_reason": reason,
-                        "failures": [{"id": rid, "val": val_str, "target": f"基準:{t_used}", "calc": "🐍 Python判定"}],
+                        "failures": [{"id": rid, "val": val_str, "target": f"基準:{t_used}", "calc": "🐍 Python 判定"}],
                         "source": "🐍 系統判定"
                     })
             except: continue
