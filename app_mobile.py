@@ -987,22 +987,22 @@ if st.session_state.photo_gallery:
         # --- 3. Python 表頭檢查 ---
         python_header_issues, python_debug_data = python_header_check(st.session_state.photo_gallery)
         
-        # --- 4. 合併結果 (正式移交權限) ---
+        # --- 4. 合併結果 ---
         ai_raw_issues = res_main.get("issues", [])
         ai_filtered_issues = []
 
         for i in ai_raw_issues:
             i['source'] = '🤖 總稽核 AI'
             i_type = i.get("issue_type", "")
+            reason = i.get("common_reason", "")
             
-            # 只有流程異常、規格提取失敗、表頭、未匹配聽 AI 的
-            # 統計與數量不符現在交給 Python 引擎了，所以排除 AI 原本報的
-            ai_only_tasks = ["流程", "規格提取失敗", "表頭", "未匹配"]
-            
-            if any(k in i_type for k in ai_only_tasks):
+            # 保留：流程異常 (跨頁大小邏輯)、統計不符、數量不符、表頭、未匹配
+            # 過濾：純數值、尺寸、格式報錯
+            if any(k in i_type for k in ["流程", "統計", "數量", "表頭", "未匹配"]):
                 ai_filtered_issues.append(i)
-        
-        # 最終合併所有稽核籃子
+            elif not any(f in i_type for f in ["數值", "尺寸", "格式"]):
+                ai_filtered_issues.append(i)
+            
         all_issues = ai_filtered_issues + python_numeric_issues + python_accounting_issues + python_header_issues
         
         st.session_state.analysis_result_cache = {
