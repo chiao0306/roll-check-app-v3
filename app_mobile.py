@@ -910,7 +910,7 @@ if st.session_state.photo_gallery:
             "time_acc": 0,         # 單一代理無第二時間
             "full_text_for_search": full_text_for_search,
             "combined_input": combined_input,
-            "python_debug_data": python_debug_data
+            "python_debug_data": python_debug_data,
             "ai_extracted_data": dim_data
         }
 
