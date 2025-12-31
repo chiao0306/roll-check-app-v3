@@ -900,7 +900,6 @@ if st.session_state.photo_gallery:
                     st.session_state.photo_gallery[idx]['table_md'] = t_md
                     st.session_state.photo_gallery[idx]['header_text'] = h_txt
                     st.session_state.photo_gallery[idx]['full_text'] = f_txt
-                     st.session_state.photo_gallery[idx]['file'] = None
                     st.session_state.photo_gallery[idx]['raw_json'] = raw_j
                     st.session_state.photo_gallery[idx]['real_page'] = r_page
                     st.session_state.photo_gallery[idx]['file'] = None
