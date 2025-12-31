@@ -380,15 +380,17 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
     ---
 
     ### 📝 輸出規範 (Output Format)
-    必須回傳單一 JSON。統計不符時必須「逐行拆分」來源明細。
+    必須回傳單一 JSON 物件。統計不符時必須「逐行拆分」來源明細。
 
     {{
       "job_no": "工令編號",
-      "summary_rows": [], 
-      "freight_target": 0,
+      "summary_rows": [
+         {{ "title": "統計表項目名稱", "target": "實交數量數字" }} 
+      ], // 💡 必須抄錄左上角統計表的「每一行」數據
+      "freight_target": 0, // 💡 左上角運費項次的數字
       "issues": [ 
          {{
-           "page": "頁碼", "item": "項目", "issue_type": "統計不符 / 🛑流程異常",
+           "page": "頁碼", "item": "項目", "issue_type": "統計不符 / 🛑流程異常 / 🛑規格提取失敗",
            "common_reason": "原因",
            "failures": [
               {{ "id": "🔍 統計總帳基準", "val": "數", "calc": "目標" }},
@@ -402,21 +404,26 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
            "page": "數字",
            "item_title": "名稱",
            "category": "分類",
-           "item_pc_target": 0,
-           "accounting_rules": {{ "local": "", "agg": "", "freight": "" }},
-           "standard_logic": {{ "logic_type": "", "threshold_list": [], "ranges_list": [], "threshold": 0 }},
+           "item_pc_target": 0, // 項目括號內的 PC 數
+           "accounting_rules": {{ "local": "", "agg": "", "freight": "" }}, // 💡 從Excel精確抄錄
+           "standard_logic": {{
+              "logic_type": "必須從 [range, un_regen, min_limit, max_limit] 選一填入", 
+              "threshold_list": [], // 規格中出現的所有數字
+              "ranges_list": [],    // AI 預算好的 [[min, max]]
+              "threshold": 0        // 主要的門檻數字，嚴禁填 0 (若標題有數字)
+           }},
            "std_spec": "含 mm 的原始規格文字",
-           "data": [ ["RollID", "實測值字串"] ]
+           "data": [ ["RollID", "實測值字串"] ] // 💡 務必保留末尾的 0，如 "349.90"
          }}
       ]
     }}
 
-    #### 💡 AI 翻譯官範例：
-    1. range: 如 `XXX±YYY` -> {{ "logic_type": "range", "min": XXX-YYY, "max": XXX+YYY }}。
-    2. un_regen: 如 `至 XXXmm 再生` -> {{ "logic_type": "un_regen", "threshold": XXX }}。
-    3. min_limit: 如 `XXXmm 以上` -> {{ "logic_type": "min_limit", "min": XXX }}。
-    4. max_limit: 如 `XXXmm 以下` -> {{ "logic_type": "max_limit", "max": XXX }}。
-    """
+    #### 💡 AI 翻譯官範例 (禁止抄襲數字，須抓取當前標題真實數字)：
+    1. range: 如 `XXX±YYY` -> {{ "logic_type": "range", "min": XXX-YYY, "max": XXX+YYY }}
+    2. un_regen: 如 `至 XXXmm 再生` -> {{ "logic_type": "un_regen", "threshold": XXX }}
+    3. min_limit: 如 `XXXmm 以上` -> {{ "logic_type": "min_limit", "min": XXX }}
+    4. max_limit: 如 `XXXmm 以下` -> {{ "logic_type": "max_limit", "max": XXX }}
+    """"""
     
     generation_config = {"response_mime_type": "application/json", "temperature": 0.0, "top_k": 1, "top_p": 0.95}
     
@@ -620,7 +627,7 @@ def python_numerical_audit(dimension_data):
             
     return list(grouped_errors.values())
     
-    def python_accounting_audit(dimension_data, res_main):
+def python_accounting_audit(dimension_data, res_main):
     """
     Python 會計官：執行單項核對、雙模式對帳 (聚合/一般)、運費精算
     """
