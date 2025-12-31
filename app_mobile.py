@@ -363,31 +363,17 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
        - **物理位階準則**：`未再生車修 < 研磨 < 再生車修 < 銲補`。
        - **判定要求**：判定要求：針對同一 Roll ID，跨製程之尺寸大小必須符合上述位階邏輯。注意：同一編號出現在不同項目表格中代表「全流程紀錄」，屬於正常現象，嚴禁判定為衝突。 僅在位階不符（例如：研磨尺寸大於再生車修）時，才回報 🛑流程異常。
         
-    #### 💰 模組 B：會計數量與物理流程稽核 (AI 核心判定)
-    當發生以下異常時，必須在 `failures` 中「逐行」列出證據：
+    #### 💰 模組 B：會計對帳數據提取 (AI 任務：抄錄傳票)
+    1. **提取左上角【統計表】(Summary Table)**：
+       - 請將統計表（左上角）中每一行包含「實交數量」的項目提取出來。
+       - **格式**：`summary_rows: [ {"title": "項目名稱", "target": 數字}, ... ]`
+       - **提取運費**：單獨提取左上角運費項次的數字到 `freight_target`。
 
-    1. **單項計算核對 (Local Check)**：
-       - **規則**：本體去重計數；軸頸/內孔計總行數(單一 ID 限 2 次)。
-       - **失敗回報格式**：
-         * {{"id": "項目名稱(括號PC數)", "val": "目標值", "calc": "目標"}}
-         * {{"id": "內文實際計數", "val": "你的計數", "calc": "實際"}}
-
-    2. **總表加總核對 (Global Check)**：
-       - **聚合模式**：若標題含「機ROLL車修/銲補/拆裝」，總帳 = Sum(本體 + 軸頸)。
-       - **標準模式**：其餘項目僅加總名稱對應子項。
-       - **失敗回報格式**：
-         * {{"id": "🔍 統計總帳基準", "val": "左上角目標數", "calc": "目標"}}
-         * {{"id": "項目名稱 (P.頁碼)", "val": "數量", "calc": "計入加總"}}
-         * {{"id": "🧮 內文實際總計", "val": "計算結果", "calc": "計算"}}
-
-    3. **運費核對 (Freight Check)**：
-       - **規則**：運費總量 = 全卷內文中所有「本體」之「未再生車修」數量的總和。
-       - **失敗回報格式**：
-         * {{"id": "🚚 運費統計基準", "val": "目標數", "calc": "目標"}}
-         * {{"id": "本體未再生 (P.頁碼)", "val": "數量", "calc": "計入運費"}}
-         * {{"id": "🧮 運費實際總計", "val": "加總結果", "calc": "計算"}}
-
-    4. **工件流程與尺寸位階檢查**：
+    2. **內文項目屬性抄錄**：
+       - **item_pc_target**: 提取項目括號內的數字（如 12PC）。
+       - **accounting_rules**: 必須精確抄錄 Excel 知識庫中的 `Unit_Rule_Local` (單項)、`Unit_Rule_Agg` (聚合)、`Unit_Rule_Freight` (運費) 文字。
+    
+    3. **工件流程與尺寸位階檢查**：
        - **位階**：`未再生 < 研磨 < 再生 < 銲補`。若後段尺寸小於前段（銲補除外），報 `🛑流程異常`。
        - **溯源與重複性**：出現「研磨/再生」必須往前檢查是否有前段紀錄。特別注意：同一編號在同一份文件中出現多次（例如同時有銲補、未再生與再生紀錄）是完全合法的全製程紀錄，不准回報「同時存在」或「物理流程衝突」。
 
@@ -618,6 +604,110 @@ def python_numerical_audit(dimension_data):
             except: continue
             
     return list(grouped_errors.values())
+    
+def python_accounting_audit(dimension_data, res_main):
+    """
+    Python 會計引擎：執行單項核對、雙模式總帳對帳、運費精算。
+    """
+    accounting_issues = []
+    
+    # --- 準備數據 ---
+    summary_rows = res_main.get("summary_rows", []) # 左上角統計表每一行
+    freight_target = res_main.get("freight_target", 0) # 左上角運費項次
+    
+    global_sum_tracker = {} # 用來追蹤總表每一項的累積值
+    for s in summary_rows:
+        global_sum_tracker[s['title']] = {"target": s['target'], "actual": 0, "details": []}
+    
+    freight_actual_sum = 0 # 運費累積
+    freight_details = []
+
+    # --- 階段 1：遍歷內文所有項目，執行「單項核對」並「分配至總帳」 ---
+    for item in dimension_data:
+        title = item.get("item_title", "")
+        page = item.get("page", "?")
+        target_pc = item.get("item_pc_target", 0) # 標題寫的 12PC
+        rules = item.get("accounting_rules", {})
+        
+        # 拆解數據字串 (ID:Val, ID:Val)
+        data_str = item.get("data_string", "")
+        raw_entries = [p for p in data_str.split(",") if ":" in p]
+        
+        # 1.1 執行單項核對邏輯 (Local Rule)
+        # 判定是：本體(去重) 還是 軸頸/內孔(計行數)
+        u_local = str(rules.get("local", ""))
+        if "1SET=4PCS" in u_local:
+            actual_item_count = len(raw_entries) / 4
+        elif "1SET=2PCS" in u_local:
+            actual_item_count = len(raw_entries) / 2
+        elif "本體" in title or "PC=PC" in u_local:
+            # 本體模式：去重計算獨立 Roll ID 數量
+            actual_item_count = len(set([e.split(":")[0].strip() for e in raw_entries]))
+        else:
+            # 軸頸模式：直接計行數
+            actual_item_count = len(raw_entries)
+
+        # [回報] 單項數量不符
+        if actual_item_count != target_pc and target_pc > 0:
+            accounting_issues.append({
+                "page": page, "item": title, "issue_type": "統計不符(單項)",
+                "common_reason": f"標題要求 {target_pc}PC，內文核算為 {actual_item_count}",
+                "failures": [
+                    {"id": f"項目目標({target_pc}PC)", "val": target_pc, "calc": "目標"},
+                    {"id": "內文實際計數", "val": actual_item_count, "calc": "實際"}
+                ]
+            })
+
+        # 1.2 執行總帳分配邏輯 (Global Check 分流)
+        for s_title in global_sum_tracker:
+            # 💡 A模式：雙軌聚合 (ROLL車修/銲補/拆裝)
+            is_agg_trigger = any(kw in s_title for kw in ["ROLL車修", "銲補", "拆裝", "機ROLL"])
+            match_this_summary = False
+            
+            if is_agg_trigger:
+                if "車修" in s_title and any(k in title for k in ["未再生", "再生", "研磨", "車修"]): match_this_summary = True
+                elif "銲補" in s_title and "銲補" in title: match_this_summary = True
+                elif "拆裝" in s_title and any(k in title for k in ["組裝", "拆裝"]): match_this_summary = True
+            else:
+                # 💡 B模式：一般核對 (名稱對應)
+                if fuzz.partial_ratio(s_title, title) > 85: match_this_summary = True
+
+            if match_this_summary:
+                u_agg = str(rules.get("agg", ""))
+                if "豁免" in u_agg: continue
+                
+                # 執行累加
+                add_val = 1 if "1SET=1PC" in u_agg else actual_item_count
+                global_sum_tracker[s_title]["actual"] += add_val
+                global_sum_tracker[s_title]["details"].append({
+                    "id": f"{title} (P.{page})", "val": add_val, "calc": "計入總帳"
+                })
+
+        # 1.3 執行運費分配邏輯 (Freight Check)
+        u_freight = str(rules.get("freight", ""))
+        if "計入" in u_freight or ("未再生" in title and "本體" in title):
+            freight_actual_sum += actual_item_count
+            freight_details.append({"id": f"{title} (P.{page})", "val": actual_item_count, "calc": "計入運費"})
+
+    # --- 階段 2：產出總表與運費異常報告 ---
+    # 2.1 總表異常檢索
+    for s_title, data in global_sum_tracker.items():
+        if data["actual"] != data["target"] and data["target"] > 0:
+            accounting_issues.append({
+                "page": "總表", "item": s_title, "issue_type": "統計不符(總帳)",
+                "common_reason": f"總表目標 {data['target']} != 內文加總 {data['actual']}",
+                "failures": [{"id": "🔍 統計總帳基準", "val": data["target"], "calc": "目標"}] + data["details"] + [{"id": "🧮 內文總計", "val": data["actual"], "calc": "計算"}]
+            })
+
+    # 2.2 運費異常檢索
+    if freight_actual_sum != freight_target and freight_target > 0:
+        accounting_issues.append({
+            "page": "總表", "item": "運費項次核對", "issue_type": "統計不符(運費)",
+            "common_reason": f"運費目標 {freight_target} != 實際加總 {freight_actual_sum}",
+            "failures": [{"id": "🚚 運費統計基準", "val": freight_target, "calc": "目標"}] + freight_details + [{"id": "🧮 運費總計", "val": freight_actual_sum, "calc": "計算"}]
+        })
+        
+    return accounting_issues
     
 # --- 6. 手機版 UI 與 核心執行邏輯 ---
 st.title("🏭 交貨單稽核")
