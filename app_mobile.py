@@ -636,10 +636,8 @@ def python_numerical_audit(dimension_data):
     return list(grouped_errors.values())
     
 def python_accounting_audit(dimension_data, res_main):
-    """
-    Python 會計官：全項目單項核對、軸頸限次檢查、雙模式對帳、運費精算。
-    支援 Agg Rule 混合指令：豁免三大籃子與單位換算 (如：豁免, 2SET=1PC)
-    """
+    #Python 會計官：全項目單項核對、軸頸限次檢查、雙模式對帳、運費精算。
+    #支援 Agg Rule 混合指令：豁免三大籃子與單位換算 (如：豁免, 2SET=1PC)
     accounting_issues = []
     from thefuzz import fuzz
     from collections import Counter
