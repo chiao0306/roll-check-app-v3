@@ -715,7 +715,15 @@ def python_accounting_audit(dimension_data, res_main):
                 elif "計入" in u_freight: match = True
                 elif is_body and "未再生" in title: match = True # 預設：本體未再生計入
                 
-                if match and "2PC=1" in u_freight: add_val = actual_item_qty / 2
+                # 💡 [動態換算優化]：自動抓取 "XPC=1" 裡的數字
+                # 無論您填 2PC=1, 3PC=1 甚至 10PC=1，Python 都會自動解析那個 X
+                if match:
+                    conversion_match = re.search(r"(\d+)PC=1", u_freight)
+                    if conversion_match:
+                        divisor = int(conversion_match.group(1)) # 抓出那個數字 (2, 3, 4...)
+                        add_val = actual_item_qty / divisor
+                    else:
+                        add_val = actual_item_qty # 沒寫換算就 1:1
             
             else:
                 # 📦 常規統計 (A聚合 或 B一般 模式)
