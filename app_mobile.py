@@ -525,15 +525,25 @@ def python_numerical_audit(dimension_data):
 
         for entry in raw_data_list:
             if not isinstance(entry, list) or len(entry) < 2: continue
-            rid, val_str = str(entry[0]).strip(), str(entry[1]).strip()
-            if not val_str or val_str in ["N/A", "nan", "M10"]: continue
+            
+            # 1. 先抓取 AI 抄錄下來的原始字串（可能包含手寫雜訊如 "129.93 -> 129.94"）
+            rid, val_raw = str(entry[0]).strip(), str(entry[1]).strip()
+            if not val_raw or val_raw in ["N/A", "nan", "M10"]: continue
 
             try:
+                # 💡 [核心修改點]：只抓取字串中的第一個數字，無視後面的塗改
+                # 使用 re.findall 找出所有符合數字格式的內容，取索引 [0] 的那一個
+                val_match = re.findall(r"\d+\.?\d*", val_raw)
+                val_str = val_match[0] if val_match else val_raw 
+
+                # 2. 接下來的判定都使用這個乾淨的 val_str
                 val = float(val_str)
+                # 💡 精確檢查：必須含小數點且後綴長度為 2 (仍會檢查 349.90 的結尾 0)
                 is_two_dec = "." in val_str and len(val_str.split(".")[-1]) == 2
                 is_pure_int = "." not in val_str
                 is_passed, reason, t_used, engine_label = True, "", "N/A", "未知"
-
+                
+                # ... (下方後續邏輯完全不用動) ...
                 # --- 💡 [核心修正]：重新排列判定優先序，解決關鍵字碰撞 ---
 
                 # 1. 【銲補模式】優先權最高
