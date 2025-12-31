@@ -620,7 +620,7 @@ def python_numerical_audit(dimension_data):
             
     return list(grouped_errors.values())
     
-def python_accounting_audit(dimension_data, res_main):
+    def python_accounting_audit(dimension_data, res_main):
     """
     Python 會計官：執行單項核對、雙模式對帳 (聚合/一般)、運費精算
     """
