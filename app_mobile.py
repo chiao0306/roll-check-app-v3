@@ -378,6 +378,7 @@ def agent_unified_check(combined_input, full_text_for_search, api_key, model_nam
     2. **內文項目屬性抄錄**：
        - **item_pc_target**: 提取項目括號內的數字（如 12PC 提取 12）。
        - **accounting_rules**: 必須精確抄錄 Excel 知識庫中的 `Unit_Rule_Local` (單項)、`Unit_Rule_Agg` (聚合)、`Unit_Rule_Freight` (運費) 文字。
+       - **特別要求**：若 `Unit_Rule_Agg` 包含多個資訊（如「豁免, 2SET=1PC」），必須「原封不動」全部抄錄並以逗號隔開。禁止自行刪減文字。
 
     3. **工件流程與尺寸位階檢查 (由 AI 判定並報於 issues)**：
        - **位階**：`未再生 < 研磨 < 再生 < 銲補`。若後段尺寸小於前段（銲補除外），報 `🛑流程異常`。
@@ -636,11 +637,13 @@ def python_numerical_audit(dimension_data):
     
 def python_accounting_audit(dimension_data, res_main):
     """
-    Python 會計官：全項目單項核對、軸頸限次檢查、雙模式對帳、運費精算
+    Python 會計官：全項目單項核對、軸頸限次檢查、雙模式對帳、運費精算。
+    支援 Agg Rule 混合指令：豁免三大籃子與單位換算 (如：豁免, 2SET=1PC)
     """
     accounting_issues = []
     from thefuzz import fuzz
     from collections import Counter
+    import re
     
     # 1. 取得對帳基準 (來自左上角統計表)
     summary_rows = res_main.get("summary_rows", [])
@@ -656,16 +659,15 @@ def python_accounting_audit(dimension_data, res_main):
         rules = item.get("accounting_rules", {})
         data_list = item.get("data", []) # 格式為 [["RollID", "Val"], ...]
         
-        # 取得所有 ID 的清單 (清洗空格與字串化)
+        # 取得所有 ID 的清單
         ids = [str(e[0]).strip() for e in data_list if e and len(e) > 0]
-        id_counts = Counter(ids) # 計算每個編號出現次數
+        id_counts = Counter(ids)
 
         # --- 2.1 嚴格單項核對 (Point 1：全項目核對) ---
         u_local = str(rules.get("local", "")) if rules.get("local") else ""
         is_body = "本體" in title
         is_journal = any(k in title for k in ["軸頸", "內孔", "Journal"])
         
-        # 決定計算邏輯：1SET=4PCS, 1SET=2PCS, 本體去重, 其餘計行數
         if "1SET=4PCS" in u_local: 
             actual_item_qty = len(data_list) / 4
         elif "1SET=2PCS" in u_local: 
@@ -675,19 +677,17 @@ def python_accounting_audit(dimension_data, res_main):
         else: 
             actual_item_qty = len(data_list) # 軸頸與其餘項目計總行數
 
-        # [回報] 單項數量不符
         if actual_item_qty != target_pc and target_pc > 0:
             accounting_issues.append({
                 "page": page, "item": title, "issue_type": "統計不符(單項)",
                 "common_reason": f"項目寫 {target_pc}PC，內文核算為 {actual_item_qty}",
                 "failures": [
-                    {"id": f"項目標題目標({target_pc}PC)", "val": target_pc, "calc": "目標"},
+                    {"id": f"項目目標({target_pc}PC)", "val": target_pc, "calc": "目標"},
                     {"id": "內文實際計數", "val": actual_item_qty, "calc": "實際"}
                 ],
                 "source": "🐍 會計引擎"
             })
 
-        # [回報] 軸頸三支禁令
         if is_journal:
             for rid, count in id_counts.items():
                 if count >= 3:
@@ -698,57 +698,67 @@ def python_accounting_audit(dimension_data, res_main):
                         "source": "🐍 會計引擎"
                     })
 
-        # --- 2.2 總表與運費對帳 (Point 2：整合 A/B 模式與運費) ---
+        # --- 2.2 總表與運費對帳 (Point 2：整合 豁免與單位換算) ---
+        # 💡 [解析 Agg 規則字串]：支援「豁免, 2SET=1PC」
+        u_agg_raw = str(rules.get("agg", "")).strip()
+        agg_parts = [p.strip() for p in u_agg_raw.split(",")]
+        is_exempt_from_baskets = "豁免" in agg_parts
+        
+        # 💡 [解析總表單位換算權重]
+        agg_multiplier = 1.0
+        for p in agg_parts:
+            conv_match = re.search(r"(\d+)SET=1PC", p)
+            if conv_match:
+                agg_multiplier = 1.0 / float(conv_match.group(1))
+
         for s_title, data in global_sum_tracker.items():
-            u_agg = str(rules.get("agg", "")) if rules.get("agg") else ""
             u_freight = str(rules.get("freight", "")) if rules.get("freight") else ""
-            
-            # 判斷是否為「運費項」
             is_freight_row = "運費" in s_title
             
             match = False
-            add_val = actual_item_qty # 預設加總值
+            current_add_val = actual_item_qty # 預設加總值
             
             if is_freight_row:
-                # 🚚 運費特殊邏輯
+                # 🚚 運費特殊邏輯 (保持動態解析 XPC=1)
                 if "豁免" in u_freight: continue
                 elif "計入" in u_freight: match = True
-                elif is_body and "未再生" in title: match = True # 預設：本體未再生計入
+                elif is_body and "未再生" in title: match = True 
                 
-                # 💡 [動態換算優化]：自動抓取 "XPC=1" 裡的數字
-                # 無論您填 2PC=1, 3PC=1 甚至 10PC=1，Python 都會自動解析那個 X
                 if match:
                     conversion_match = re.search(r"(\d+)PC=1", u_freight)
                     if conversion_match:
-                        divisor = int(conversion_match.group(1)) # 抓出那個數字 (2, 3, 4...)
-                        add_val = actual_item_qty / divisor
-                    else:
-                        add_val = actual_item_qty # 沒寫換算就 1:1
+                        divisor = int(conversion_match.group(1))
+                        current_add_val = actual_item_qty / divisor
             
             else:
-                # 📦 常規統計 (A聚合 或 B一般 模式)
-                is_summary_repair = any(k in s_title for k in ["ROLL車修", "再生"])
-                is_summary_weld   = "銲補" in s_title
-                is_summary_assem  = any(k in s_title for k in ["拆裝", "組裝", "裝配"])
-                
-                if is_summary_repair or is_summary_weld or is_summary_assem:
-                    # A模式聚合
-                    if is_summary_repair and any(k in title for k in ["未再生", "再生", "研磨", "車修"]): match = True
-                    elif is_summary_weld and "銲補" in title: match = True
-                    elif is_summary_assem and any(k in title for k in ["拆裝", "組裝", "真圓度"]): match = True
-                else:
-                    # B模式一般核對
-                    if fuzz.partial_ratio(s_title, title) > 85: match = True
+                # 📦 常規總表核對 (A聚合籃子 或 B一般模式)
+                is_repair = any(k in s_title for k in ["ROLL車修", "再生"])
+                is_weld   = "銲補" in s_title
+                is_assem  = any(k in s_title for k in ["拆裝", "組裝", "裝配"])
+                is_basket_row = is_repair or is_weld or is_assem
 
+                if is_basket_row:
+                    # 💡 A模式：如果標記「豁免」，則不進入這三大籃子
+                    if is_exempt_from_baskets:
+                        match = False
+                    else:
+                        if is_repair and any(k in title for k in ["未再生", "再生", "研磨", "車修"]): match = True
+                        elif is_weld and "銲補" in title: match = True
+                        elif is_assem and any(k in title for k in ["拆裝", "組裝", "真圓度"]): match = True
+                
+                # 💡 B模式：一般核對 (名字對上就要點貨，無視「豁免」標籤)
+                if not match and fuzz.partial_ratio(s_title, title) > 85:
+                    match = True
+
+                # 💡 套用單位換算比例 (由 Agg Rule 決定)
                 if match:
-                    if "豁免" in u_agg: match = False # Excel 強制排除
-                    elif "1SET=1PC" in u_agg: add_val = 1 # Excel 強制改為1組
+                    current_add_val = actual_item_qty * agg_multiplier
 
             # 執行累加並紀錄明細
             if match:
-                data["actual"] += add_val
-                label = "計入運費" if is_freight_row else "計入總帳"
-                data["details"].append({"id": f"{title} (P.{page})", "val": add_val, "calc": label})
+                data["actual"] += current_add_val
+                label = "計入運費" if is_freight_row else ("計入總帳(換算)" if agg_multiplier != 1.0 else "計入總帳")
+                data["details"].append({"id": f"{title} (P.{page})", "val": current_add_val, "calc": label})
 
     # --- 3. 結算最終結果報告 ---
     for s_title, data in global_sum_tracker.items():
@@ -758,12 +768,8 @@ def python_accounting_audit(dimension_data, res_main):
             
             accounting_issues.append({
                 "page": "總表", "item": s_title, "issue_type": i_type,
-                "common_reason": f"標註 {data['target']} != 內文加總 {data['actual']}",
-                "failures": [
-                    {"id": f"{icon} 統計基準", "val": data["target"], "calc": "目標"}
-                ] + data["details"] + [
-                    {"id": f"🧮 內文實際總計", "val": data["actual"], "calc": "計算"}
-                ],
+                "common_reason": f"標註 {data['target']} != 實際加總 {data['actual']}",
+                "failures": [{"id": f"{icon} 統計基準", "val": data["target"], "calc": "目標"}] + data["details"] + [{"id": f"🧮 內文實際總計", "val": data["actual"], "calc": "計算"}],
                 "source": "🐍 會計引擎"
             })
         
