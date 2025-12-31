@@ -548,12 +548,22 @@ def python_numerical_audit(dimension_data):
                     # 分支 A: 軸頸未再生 (max_limit)
                     if "軸頸" in (cat + title):
                         engine_label = "軸頸(上限)"
+                        # 1. 收集所有可能的數字標準
                         candidates = [float(n) for n in (clean_std + s_list)]
-                        target = max(candidates) if candidates else (float(s_threshold) if s_threshold else 0)
+                        if s_threshold: candidates.append(float(s_threshold))
+                        
+                        # 2. 🛡️ 安全鎖：如果完全沒抓到基準數字，直接跳過判定，不准用 0 判斷
+                        if not candidates or max(candidates) == 0:
+                            continue 
+
+                        target = max(candidates)
                         t_used = target
-                        if target > 0:
-                            if not is_pure_int: is_passed, reason = False, "格式錯誤: 應為純整數"
-                            elif val > target: is_passed, reason = False, f"超過上限 {target}"
+                        
+                        # 3. 執行判定邏輯
+                        if not is_pure_int: 
+                            is_passed, reason = False, "軸頸格式錯誤: 應為純整數"
+                        elif val > target: 
+                            is_passed, reason = False, f"超過上限 {target}"
                     
                     # 分支 B: 本體未再生 (un_regen)
                     else:
@@ -562,6 +572,7 @@ def python_numerical_audit(dimension_data):
                         if s_threshold and float(s_threshold) >= 120.0: candidates.append(float(s_threshold))
                         
                         if candidates:
+                            if not candidates: continue
                             target = max(candidates)
                             t_used = target
                             if val <= target:
@@ -889,6 +900,7 @@ if st.session_state.photo_gallery:
                     st.session_state.photo_gallery[idx]['table_md'] = t_md
                     st.session_state.photo_gallery[idx]['header_text'] = h_txt
                     st.session_state.photo_gallery[idx]['full_text'] = f_txt
+                     st.session_state.photo_gallery[idx]['file'] = None
                     st.session_state.photo_gallery[idx]['raw_json'] = raw_j
                     st.session_state.photo_gallery[idx]['real_page'] = r_page
                     st.session_state.photo_gallery[idx]['file'] = None
@@ -967,18 +979,19 @@ if st.session_state.photo_gallery:
             i['source'] = '🤖 總稽核 AI'
             i_type = i.get("issue_type", "")
             
-            # 💡 [關鍵放寬]：
-            # 只要是 流程異常、統計不符、數量不符、運費、表頭、未匹配規則，通通保留！
-            keep_list = ["流程", "統計", "數量", "運費", "表頭", "未匹配"]
-            if any(k in i_type for k in keep_list):
+            # 💡 [關鍵：保留流程與會計，只過濾數值規格]
+            # 只要是 流程異常、統計不符、數量不符、運費、表頭、未匹配、依賴檢查，通通保留！
+            keep_keywords = ["流程", "統計", "數量", "運費", "表頭", "未匹配", "依賴"]
+            if any(k in i_type for k in keep_keywords):
                 ai_filtered_issues.append(i)
             else:
-                # 只有純粹標註為「數值」、「格式」、「尺寸」的 AI 報錯才過濾
+                # 只有標註為「數值異常」、「格式錯誤」、「尺寸超規」的 AI 判斷才過濾
                 # 因為這部分由 Python 判定最準，不需 AI 多嘴
-                forbidden = ["數值", "尺寸", "格式"]
+                forbidden = ["數值", "尺寸", "格式", "超規", "不足"]
                 if not any(f in i_type for f in forbidden):
                     ai_filtered_issues.append(i)
             
+        # 最終合併
         all_issues = ai_filtered_issues + python_numeric_issues + python_header_issues
         
         st.session_state.analysis_result_cache = {
