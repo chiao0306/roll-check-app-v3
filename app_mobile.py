@@ -747,25 +747,16 @@ if st.session_state.photo_gallery:
     trigger_analysis = start_btn or is_auto_start
 
     if trigger_analysis:
-        # 1. 建立狀態盒子 (這就是你想要的載入感)
-        with st.status("總稽核官正在進行全方位分析...", expanded=True) as status_box:
-            total_start = time.time()
+        total_start = time.time()
+        status = st.empty()
+        progress_bar = st.progress(0)
             
-            # ⚠️ 重點！這行絕對不能刪，它是用來顯示「正在平行掃描...」那些文字的
-            status = st.empty() 
+        extracted_data_list = [None] * len(st.session_state.photo_gallery)
+        full_text_for_search = ""
+        total_imgs = len(st.session_state.photo_gallery)
             
-            # ⚠️ 這行也要留著，顯示進度條
-            progress_bar = st.progress(0)
-            
-            extracted_data_list = [None] * len(st.session_state.photo_gallery)
-            full_text_for_search = ""
-            total_imgs = len(st.session_state.photo_gallery)
-            
-            ocr_start = time.time()
+        ocr_start = time.time()
 
-            # --- 下面接原本的 process_image_task 定義 ---
-            # (請確保後面的程式碼「通通都要」比 "with" 這一行多縮排 4 個空格)
-            
         def process_image_task(index, item):
             index = int(index)
             # 如果已經有資料了就不重複掃描
