@@ -911,6 +911,7 @@ if st.session_state.photo_gallery:
             "full_text_for_search": full_text_for_search,
             "combined_input": combined_input,
             "python_debug_data": python_debug_data
+            "ai_extracted_data": dim_data
         }
 
     if st.session_state.analysis_result_cache:
@@ -927,6 +928,15 @@ if st.session_state.photo_gallery:
                 st.caption("無匹配規則")
             else:
                 st.markdown(rules_text)
+                
+        # --- 新增的 Debug 展開頁 ---
+        with st.expander("🔬 查看 AI 抄錄給 Python 的原始數據 (檢查手寫過濾)", expanded=False):
+            raw_dim_data = cache.get("ai_extracted_data", [])
+            if raw_dim_data:
+                st.write("這是 AI 抄錄並翻譯後的 JSON（包含格式是否正確、數字是否被簡化）：")
+                st.json(raw_dim_data)
+            else:
+                st.caption("無數據提取資料。")
 
         with st.expander("🐍 查看 Python 硬邏輯偵測結果 (Debug)", expanded=False):
             if cache.get('python_debug_data'):
