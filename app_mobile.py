@@ -681,24 +681,27 @@ def python_accounting_audit(dimension_data, res_main):
                 "source": "🐍 會計引擎"
             })
 
-        # --- 2.2 總表對帳 (Global Check - A/B 模式) ---
+        # --- 2.2 總表對帳 (A聚合/B一般) ---
         for s_title, data in global_sum_tracker.items():
-            # 判斷是否屬於該總表項目的「加總範圍」
-            is_agg_mode = any(kw in s_title for kw in ["ROLL車修", "銲補", "拆裝", "機ROLL"])
-            match = False
-            if is_agg_mode:
-                if "車修" in s_title and any(k in title for k in ["未再生", "再生", "研磨", "車修"]): match = True
-                elif "銲補" in s_title and "銲補" in title: match = True
-                elif "拆裝" in s_title and any(k in title for k in ["組裝", "拆裝"]): match = True
-            else:
-                if fuzz.partial_ratio(s_title, title) > 85: match = True # 一般模式
+            # 💡 [加強版]：辨識這張總表標題屬於哪一類聚合籃子
+            is_summary_repair = any(k in s_title for k in ["車修", "再生"])
+            is_summary_weld   = "銲補" in s_title
+            is_summary_assem  = any(k in s_title for k in ["拆裝", "組裝", "裝配"])
 
-            if match:
-                u_agg = str(rules.get("agg", ""))
-                if "豁免" in u_agg: continue
-                add_val = 1 if "1SET=1PC" in u_agg else actual_item_qty
-                data["actual"] += add_val
-                data["details"].append({"id": f"{title} (P.{page})", "val": add_val, "calc": "計入總帳"})
+            is_agg = is_summary_repair or is_summary_weld or is_summary_assem
+            match = False
+            
+            if is_agg:
+                # 💡 A模式聚合邏輯：只要內文項目包含相關關鍵字，就吸入對應籃子
+                if is_summary_repair and any(k in title for k in ["未再生", "再生", "車修"]): 
+                    match = True
+                elif is_summary_weld and "銲補" in title: 
+                    match = True
+                elif is_summary_assem and any(k in title for k in ["拆裝", "組裝", "真圓度"]): 
+                    match = True
+            else:
+                # B模式：一般對帳 (完全比對或高度相似)
+                if fuzz.partial_ratio(s_title, title) > 80: match = True
 
         # --- 2.3 運費核對 ---
         u_freight = str(rules.get("freight", ""))
