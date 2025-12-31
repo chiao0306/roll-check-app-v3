@@ -990,14 +990,12 @@ if st.session_state.photo_gallery:
             
         status.text("總稽核 Agent 正在進行全方位分析...")
         
-     # --- 單一代理執行 ---
+        # 1. 執行 AI 分析
         t0 = time.time()
-        res_main = agent_unified_check(combined_input, full_text_for_search, GEMINI_KEY, main_model_name)
-        
-        # 💡 [修正] 移除原本這裡的重複 python_numeric_issues 呼叫
-        
-        t1 = time.time()
-        time_main = t1 - t0
+        # 💡 [修正]：不再重複傳送 full_text_for_search
+        # 既然 full_text_for_search 只是用來找規則，那就不要把它當成參數傳給 agent
+        res_main = agent_unified_check(combined_input, combined_input, GEMINI_KEY, main_model_name)
+        time_main = time.time() - t0
         
         progress_bar.progress(100)
         status.empty()
