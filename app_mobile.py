@@ -940,7 +940,7 @@ if st.session_state.photo_gallery:
             
         status.text("總稽核 Agent 正在進行全方位分析...")
         
-        # --- 單一代理執行 ---
+     # --- 單一代理執行 ---
         t0 = time.time()
         res_main = agent_unified_check(combined_input, full_text_for_search, GEMINI_KEY, main_model_name)
         
@@ -954,7 +954,7 @@ if st.session_state.photo_gallery:
         
         total_end = time.time()
         
-        # --- 1. 成本計算 (保持原樣) ---
+        # --- 1. 成本計算 (完全依照您的版本，原封不動) ---
         usage_main = res_main.get("_token_usage", {"input": 0, "output": 0})
         
         def get_model_rate(model_name):
@@ -968,12 +968,17 @@ if st.session_state.photo_gallery:
                 else: return 1.25, 10.00 # Pro
 
         rate_in, rate_out = get_model_rate(main_model_name)
+        
         cost_usd = (usage_main["input"] / 1_000_000 * rate_in) + (usage_main["output"] / 1_000_000 * rate_out)
         cost_twd = cost_usd * 32.5
         
         # --- 2. 啟動 Python 硬核數值稽核 (改在這裡執行一次即可) ---
         dim_data = res_main.get("dimension_data", [])
         python_numeric_issues = python_numerical_audit(dim_data)
+        
+        # --- 💡 [新增插入] 啟動 Python 會計引擎 (解決 NameError) ---
+        # 這裡會執行您最看重的聚合模式、本體去重與運費核對
+        python_accounting_issues = python_accounting_audit(dim_data, res_main)
         
         # --- 3. Python 表頭檢查 ---
         python_header_issues, python_debug_data = python_header_check(st.session_state.photo_gallery)
@@ -986,15 +991,14 @@ if st.session_state.photo_gallery:
             i['source'] = '🤖 總稽核 AI'
             i_type = i.get("issue_type", "")
             
-            # 💡 [重大改變]：
-            # 我們不再保留 AI 報出的「統計」和「數量」問題，因為 Python 算的才是對的。
-            # 只保留：流程異常、規格提取失敗、表頭不一、未匹配規則。
+            # 只有流程異常、規格提取失敗、表頭、未匹配聽 AI 的
+            # 統計與數量不符現在交給 Python 引擎了，所以排除 AI 原本報的
             ai_only_tasks = ["流程", "規格提取失敗", "表頭", "未匹配"]
             
             if any(k in i_type for k in ai_only_tasks):
                 ai_filtered_issues.append(i)
-            
-        # 最終合併
+        
+        # 最終合併所有稽核籃子
         all_issues = ai_filtered_issues + python_numeric_issues + python_accounting_issues + python_header_issues
         
         st.session_state.analysis_result_cache = {
